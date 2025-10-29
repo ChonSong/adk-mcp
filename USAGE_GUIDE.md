@@ -408,7 +408,7 @@ class MainActivity : AppCompatActivity() {
         }
         
         webView.evaluateJavascript(
-            "window.ADK.receiveMessage('${response}')",
+            "window.ADK.receiveMessage('${response.toString()}')",
             null
         )
     }
