@@ -452,10 +452,7 @@ def get_comprehensive_ui_html(websocket_port: int = 8081) -> str:
                 <h3>Python Code Executor</h3>
                 <div class="form-group">
                     <label>Python Code</label>
-                    <textarea id="codeInput" class="code-editor" placeholder="# Enter Python code here
-print('Hello from ADK-MCP!')
-result = 2 + 2
-print(f'Result: {{result}}')"># Example: Calculate fibonacci
+                    <textarea id="codeInput" class="code-editor"># Example: Calculate fibonacci
 def fib(n):
     if n <= 1:
         return n

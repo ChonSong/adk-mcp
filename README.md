@@ -113,7 +113,19 @@ The server will start on:
 - HTTP: `http://localhost:8080`
 - WebSocket: `ws://localhost:8081`
 
-Access the web interface at `http://localhost:8080` or the Android WebView interface at `http://localhost:8080/webview`
+Access the interfaces:
+- **Comprehensive Control Panel UI**: `http://localhost:8080/ui` (recommended)
+- **Information Page**: `http://localhost:8080`
+- **Android WebView Interface**: `http://localhost:8080/webview`
+
+The Control Panel UI provides a modern, tabbed interface to access all features including:
+- Dashboard with real-time server status
+- Bidirectional streaming chat
+- Python code executor with live results
+- Sentiment analysis tool
+- Text translation tool
+- Text generation tool
+- API request history viewer
 
 ## API Endpoints
 
@@ -121,6 +133,9 @@ Access the web interface at `http://localhost:8080` or the Android WebView inter
 
 #### `GET /`
 Main information page
+
+#### `GET /ui`
+Comprehensive Control Panel UI with access to all features
 
 #### `GET /health`
 Health check endpoint
