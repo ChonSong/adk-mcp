@@ -1,6 +1,6 @@
 # ADK-MCP (Agent Development Kit - MCP)
 
-A comprehensive Agent Development Kit with bidirectional streaming support, designed for building interactive AI agents with real-time communication capabilities.
+A comprehensive Agent Development Kit with bidirectional streaming support, designed for building interactive AI agents with real-time coaddmmunication capabilities.
 
 ## Features
 
