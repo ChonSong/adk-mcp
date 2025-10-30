@@ -7,16 +7,20 @@ A comprehensive Agent Development Kit with bidirectional streaming support, desi
 ### Core Capabilities
 - **Bidirectional Streaming**: Real-time text-based communication using WebSocket and async queues
 - **Python Code Execution**: Server-side Python execution with safety checks (subprocess-based)
-- **Mock Google Cloud Services**: Simulated AI services for development and testing
+- **Google Cloud Services**: Integration with Google Cloud AI services, with a mock provider for local development.
   - Sentiment Analysis
   - Text Translation
   - Text Generation
   - Speech-to-Text & Text-to-Speech
+- **Extensible Message Handling**: Use `StreamHandler` to register custom handlers for different message types.
+- **API Request History**: Track mock service API calls for debugging and analysis.
+- **Interactive WebView UI**: A pre-built, chat-like HTML interface for the Android WebView.
+- **Health Check Endpoint**: Monitor server status and active connections via a `/health` endpoint.
 - **Android WebView Support**: Ready-to-use bridge for mobile integration
 
 ### Architecture
 - **Modality**: Text-only (voice capabilities can be added later)
-- **Credentials**: Mocked APIs for all Google Cloud services
+- **Credentials**: Supports Google Cloud service account credentials, with a fallback to mocked APIs.
 - **Mobile**: WebView wrapper for Android
 - **Execution**: Simple subprocess-based Python execution (Docker sandbox planned for future)
 

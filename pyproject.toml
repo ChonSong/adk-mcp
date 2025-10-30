@@ -1,3 +1,26 @@
+[project]
+name = "adk-mcp"
+version = "0.1.0"
+description = "Agent Development Kit with bidirectional streaming support"
+authors = [{ name = "ADK Team" }]
+readme = "README.md"
+requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "websockets>=10.0",
+    "aiohttp>=3.8.0",
+]
+
+[project.scripts]
+adk = "adk_mcp.server:main"
+
 [build-system]
 requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"

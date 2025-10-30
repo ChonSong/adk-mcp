@@ -60,30 +60,30 @@ class ADKServer:
     
     async def handle_index(self, request: web.Request) -> web.Response:
         """Handle index page."""
-        html = """
+        html = f"""
         <!DOCTYPE html>
         <html>
         <head>
             <title>ADK-MCP Server</title>
             <style>
-                body {
+                body {{
                     font-family: Arial, sans-serif;
                     max-width: 800px;
                     margin: 50px auto;
                     padding: 20px;
-                }
-                h1 { color: #2196f3; }
-                .endpoint {
+                }}
+                h1 {{ color: #2196f3; }}
+                .endpoint {{
                     background: #f5f5f5;
                     padding: 10px;
                     margin: 10px 0;
                     border-radius: 4px;
-                }
-                code {
+                }}
+                code {{
                     background: #e0e0e0;
                     padding: 2px 6px;
                     border-radius: 3px;
-                }
+                }}
             </style>
         </head>
         <body>
@@ -91,16 +91,16 @@ class ADKServer:
             <p>Agent Development Kit with bidirectional streaming support</p>
             
             <h2>Available Endpoints</h2>
-            <div class="endpoint">
+            <div class="endpoint"> 
                 <strong>GET /health</strong> - Health check
             </div>
-            <div class="endpoint">
+            <div class="endpoint"> 
                 <strong>GET /webview</strong> - Android WebView interface
             </div>
-            <div class="endpoint">
+            <div class="endpoint"> 
                 <strong>POST /execute</strong> - Execute Python code
             </div>
-            <div class="endpoint">
+            <div class="endpoint"> 
                 <strong>POST /api/sentiment</strong> - Sentiment analysis (mocked)
             </div>
             <div class="endpoint">
@@ -111,10 +111,10 @@ class ADKServer:
             </div>
             
             <h2>WebSocket</h2>
-            <p>Connect to <code>ws://localhost:{}</code> for bidirectional streaming</p>
+            <p>Connect to <code>ws://localhost:{self.websocket_port}</code> for bidirectional streaming</p>
         </body>
         </html>
-        """.format(self.websocket_port)
+        """
         return web.Response(text=html, content_type="text/html")
     
     async def handle_health(self, request: web.Request) -> web.Response:
