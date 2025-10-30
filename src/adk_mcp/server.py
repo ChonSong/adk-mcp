@@ -11,6 +11,7 @@ from .streaming import BiDirectionalStream, StreamMessage, WebSocketStream
 from .executor import PythonExecutor, SafePythonExecutor
 from .mock_services import MockGoogleCloudServices
 from .mobile.android_webview import AndroidWebViewBridge
+from .ui_template import get_comprehensive_ui_html
 
 
 class ADKServer:
@@ -51,6 +52,7 @@ class ADKServer:
     def setup_routes(self):
         """Setup HTTP routes."""
         self.app.router.add_get("/", self.handle_index)
+        self.app.router.add_get("/ui", self.handle_ui)
         self.app.router.add_get("/health", self.handle_health)
         self.app.router.add_get("/webview", self.handle_webview)
         self.app.router.add_post("/execute", self.handle_execute)
@@ -71,50 +73,110 @@ class ADKServer:
                     max-width: 800px;
                     margin: 50px auto;
                     padding: 20px;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    min-height: 100vh;
                 }}
-                h1 {{ color: #2196f3; }}
+                .container {{
+                    background: white;
+                    padding: 40px;
+                    border-radius: 12px;
+                    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                }}
+                h1 {{ 
+                    color: #667eea; 
+                    text-align: center;
+                    font-size: 2.5em;
+                    margin-bottom: 10px;
+                }}
+                .subtitle {{
+                    text-align: center;
+                    color: #6c757d;
+                    margin-bottom: 30px;
+                }}
+                .cta {{
+                    text-align: center;
+                    margin: 30px 0;
+                }}
+                .cta a {{
+                    display: inline-block;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    padding: 15px 40px;
+                    text-decoration: none;
+                    border-radius: 8px;
+                    font-size: 1.2em;
+                    font-weight: 600;
+                    transition: transform 0.2s, box-shadow 0.2s;
+                }}
+                .cta a:hover {{
+                    transform: translateY(-2px);
+                    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+                }}
                 .endpoint {{
-                    background: #f5f5f5;
-                    padding: 10px;
+                    background: #f8f9fa;
+                    padding: 15px;
                     margin: 10px 0;
-                    border-radius: 4px;
+                    border-radius: 8px;
+                    border-left: 4px solid #667eea;
                 }}
                 code {{
-                    background: #e0e0e0;
-                    padding: 2px 6px;
-                    border-radius: 3px;
+                    background: #e9ecef;
+                    padding: 4px 8px;
+                    border-radius: 4px;
+                    font-family: 'Courier New', monospace;
+                }}
+                .section {{
+                    margin: 30px 0;
                 }}
             </style>
         </head>
         <body>
-            <h1>ADK-MCP Server</h1>
-            <p>Agent Development Kit with bidirectional streaming support</p>
-            
-            <h2>Available Endpoints</h2>
-            <div class="endpoint"> 
-                <strong>GET /health</strong> - Health check
+            <div class="container">
+                <h1>🚀 ADK-MCP Server</h1>
+                <p class="subtitle">Agent Development Kit with Model Context Protocol</p>
+                
+                <div class="cta">
+                    <a href="/ui">Open Control Panel →</a>
+                </div>
+                
+                <div class="section">
+                    <h2>Available Endpoints</h2>
+                    <div class="endpoint"> 
+                        <strong>GET /ui</strong> - Comprehensive Control Panel UI
+                    </div>
+                    <div class="endpoint"> 
+                        <strong>GET /health</strong> - Health check
+                    </div>
+                    <div class="endpoint"> 
+                        <strong>GET /webview</strong> - Android WebView interface
+                    </div>
+                    <div class="endpoint"> 
+                        <strong>POST /execute</strong> - Execute Python code
+                    </div>
+                    <div class="endpoint"> 
+                        <strong>POST /api/sentiment</strong> - Sentiment analysis (mocked)
+                    </div>
+                    <div class="endpoint">
+                        <strong>POST /api/translate</strong> - Text translation (mocked)
+                    </div>
+                    <div class="endpoint">
+                        <strong>POST /api/generate</strong> - Text generation (mocked)
+                    </div>
+                </div>
+                
+                <div class="section">
+                    <h2>WebSocket</h2>
+                    <p>Connect to <code>ws://localhost:{self.websocket_port}</code> for bidirectional streaming</p>
+                </div>
             </div>
-            <div class="endpoint"> 
-                <strong>GET /webview</strong> - Android WebView interface
-            </div>
-            <div class="endpoint"> 
-                <strong>POST /execute</strong> - Execute Python code
-            </div>
-            <div class="endpoint"> 
-                <strong>POST /api/sentiment</strong> - Sentiment analysis (mocked)
-            </div>
-            <div class="endpoint">
-                <strong>POST /api/translate</strong> - Text translation (mocked)
-            </div>
-            <div class="endpoint">
-                <strong>POST /api/generate</strong> - Text generation (mocked)
-            </div>
-            
-            <h2>WebSocket</h2>
-            <p>Connect to <code>ws://localhost:{self.websocket_port}</code> for bidirectional streaming</p>
         </body>
         </html>
         """
+        return web.Response(text=html, content_type="text/html")
+    
+    async def handle_ui(self, request: web.Request) -> web.Response:
+        """Serve comprehensive UI control panel."""
+        html = get_comprehensive_ui_html(self.websocket_port)
         return web.Response(text=html, content_type="text/html")
     
     async def handle_health(self, request: web.Request) -> web.Response:
