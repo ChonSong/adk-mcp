@@ -12,6 +12,8 @@ from .executor import PythonExecutor, SafePythonExecutor
 from .mock_services import MockGoogleCloudServices
 from .mobile.android_webview import AndroidWebViewBridge
 from .google_adk import GoogleADKWebAgent, ADKWebConfig, ADKWebStreamHandler, create_adk_config_from_env
+from .voice_streaming import VoiceStreamManager, VoiceWebSocketHandler
+from .adk_voice_agent import GoogleADKVoiceAgent
 
 
 class ADKServer:
@@ -52,9 +54,15 @@ class ADKServer:
         
         # Google ADK-Web integration
         self.google_adk_agent = None
+        self.google_adk_voice_agent = None
         if enable_google_adk:
             config = adk_config or create_adk_config_from_env()
             self.google_adk_agent = GoogleADKWebAgent(config)
+            self.google_adk_voice_agent = GoogleADKVoiceAgent(config, self.executor)
+        
+        # Voice streaming
+        self.voice_manager = VoiceStreamManager()
+        self.voice_handler = VoiceWebSocketHandler(self.voice_manager)
         
         # Active streams
         self.active_streams: Dict[str, WebSocketStream] = {}
@@ -64,6 +72,10 @@ class ADKServer:
         self.app.router.add_get("/", self.handle_index)
         self.app.router.add_get("/health", self.handle_health)
         self.app.router.add_get("/webview", self.handle_webview)
+        self.app.router.add_get("/voice", self.handle_voice_client)
+        
+        # Static file serving
+        self.app.router.add_static("/static/", "static/")
         self.app.router.add_post("/execute", self.handle_execute)
         self.app.router.add_post("/api/sentiment", self.handle_sentiment)
         self.app.router.add_post("/api/translate", self.handle_translate)
@@ -73,6 +85,10 @@ class ADKServer:
         self.app.router.add_post("/adk/chat", self.handle_adk_chat)
         self.app.router.add_post("/adk/session/start", self.handle_adk_start_session)
         self.app.router.add_post("/adk/session/end", self.handle_adk_end_session)
+        
+        # Voice streaming endpoints
+        self.app.router.add_get("/voice/stream", self.handle_voice_stream)
+        self.app.router.add_get("/voice/stats", self.handle_voice_stats)
     
     async def handle_index(self, request: web.Request) -> web.Response:
         """Handle index page."""
@@ -137,8 +153,17 @@ class ADKServer:
                 <strong>POST /adk/session/end</strong> - End conversation session
             </div>
             
+            <h2>Voice Streaming Endpoints</h2>
+            <div class="endpoint">
+                <strong>GET /voice/stream</strong> - WebSocket endpoint for voice streaming
+            </div>
+            <div class="endpoint">
+                <strong>GET /voice/stats</strong> - Voice session statistics
+            </div>
+            
             <h2>WebSocket</h2>
             <p>Connect to <code>ws://localhost:{self.websocket_port}</code> for bidirectional streaming</p>
+            <p>Connect to <code>ws://localhost:{self.websocket_port}/voice/stream</code> for voice streaming</p>
         </body>
         </html>
         """
@@ -146,13 +171,17 @@ class ADKServer:
     
     async def handle_health(self, request: web.Request) -> web.Response:
         """Health check endpoint."""
+        voice_stats = self.voice_manager.get_session_stats() if self.voice_manager else {}
+        
         return web.json_response({
             "status": "healthy",
             "active_streams": len(self.active_streams),
             "executor_enabled": self.executor is not None,
             "mock_services_enabled": self.mock_services is not None,
             "google_adk_enabled": self.google_adk_agent is not None,
+            "voice_streaming_enabled": self.google_adk_voice_agent is not None,
             "active_sessions": len(self.google_adk_agent.active_sessions) if self.google_adk_agent else 0,
+            "active_voice_sessions": voice_stats.get("active_sessions", 0),
         })
     
     async def handle_webview(self, request: web.Request) -> web.Response:
@@ -329,6 +358,42 @@ class ADKServer:
                 status=500
             )
     
+    async def handle_voice_stream(self, request: web.Request) -> web.WebSocketResponse:
+        """Handle voice streaming WebSocket connection."""
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        
+        # Create voice session
+        if self.google_adk_voice_agent:
+            session = await self.google_adk_voice_agent.create_voice_session(ws)
+            
+            try:
+                # Handle voice streaming
+                await self.voice_handler.handle_connection(ws, "/voice/stream")
+            finally:
+                await self.google_adk_voice_agent.close_voice_session(session)
+        else:
+            await ws.close(code=1011, message=b"Voice streaming not available")
+        
+        return ws
+    
+    async def handle_voice_stats(self, request: web.Request) -> web.Response:
+        """Get voice streaming statistics."""
+        stats = {
+            "voice_manager": self.voice_manager.get_session_stats(),
+            "voice_agent": self.google_adk_voice_agent.get_session_stats() if self.google_adk_voice_agent else None
+        }
+        return web.json_response(stats)
+    
+    async def handle_voice_client(self, request: web.Request) -> web.Response:
+        """Serve voice-enabled web client."""
+        try:
+            with open("static/voice_client.html", "r") as f:
+                html_content = f.read()
+            return web.Response(text=html_content, content_type="text/html")
+        except FileNotFoundError:
+            return web.Response(text="Voice client not found", status=404)
+    
     async def handle_websocket(self, websocket: WebSocketServerProtocol):
         """Handle WebSocket connection for bidirectional streaming."""
         stream = WebSocketStream(websocket)
@@ -376,6 +441,10 @@ class ADKServer:
         # Initialize Google ADK-Web agent if enabled
         if self.google_adk_agent:
             await self.google_adk_agent.initialize()
+        
+        # Initialize Google ADK Voice agent if enabled
+        if self.google_adk_voice_agent:
+            await self.google_adk_voice_agent.initialize()
         
         # Start HTTP server
         runner = web.AppRunner(self.app)

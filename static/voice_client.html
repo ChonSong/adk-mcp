@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ADK-MCP Voice Client</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            color: #333;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            padding: 1rem 2rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .header h1 {
+            color: white;
+            font-size: 1.8rem;
+            font-weight: 300;
+        }
+
+        .header .subtitle {
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 0.9rem;
+            margin-top: 0.5rem;
+        }
+
+        .main-container {
+            flex: 1;
+            display: flex;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+            gap: 2rem;
+            width: 100%;
+        }
+
+        .voice-panel {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 2rem;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        .code-panel {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 2rem;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        .voice-controls {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        .voice-button {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            border: none;
+            font-size: 2rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 0 1rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .voice-button.start {
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+            color: white;
+            box-shadow: 0 8px 25px rgba(76, 175, 80, 0.3);
+        }
+
+        .voice-button.start:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 35px rgba(76, 175, 80, 0.4);
+        }
+
+        .voice-button.stop {
+            background: linear-gradient(135deg, #f44336, #d32f2f);
+            color: white;
+            box-shadow: 0 8px 25px rgba(244, 67, 54, 0.3);
+            animation: pulse 2s infinite;
+        }
+
+        .voice-button.stop:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 35px rgba(244, 67, 54, 0.4);
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        .voice-button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 1rem 0;
+            font-weight: 500;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 0.5rem;
+            transition: all 0.3s ease;
+        }
+
+        .status-dot.disconnected { background: #f44336; }
+        .status-dot.connecting { background: #ff9800; animation: blink 1s infinite; }
+        .status-dot.connected { background: #4CAF50; }
+        .status-dot.listening { background: #2196F3; animation: pulse 1s infinite; }
+        .status-dot.speaking { background: #9C27B0; animation: pulse 1s infinite; }
+
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0.3; }
+        }
+
+        .conversation-area {
+            height: 400px;
+            overflow-y: auto;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 1rem;
+            background: #fafafa;
+            margin-bottom: 1rem;
+        }
+
+        .message {
+            margin-bottom: 1rem;
+            padding: 0.75rem 1rem;
+            border-radius: 10px;
+            max-width: 80%;
+            word-wrap: break-word;
+        }
+
+        .message.user {
+            background: linear-gradient(135deg, #2196F3, #1976D2);
+            color: white;
+            margin-left: auto;
+            text-align: right;
+        }
+
+        .message.assistant {
+            background: linear-gradient(135deg, #f5f5f5, #e0e0e0);
+            color: #333;
+            margin-right: auto;
+        }
+
+        .message.system {
+            background: linear-gradient(135deg, #ff9800, #f57c00);
+            color: white;
+            text-align: center;
+            margin: 0 auto;
+            font-size: 0.9rem;
+        }
+
+        .message .timestamp {
+            font-size: 0.8rem;
+            opacity: 0.7;
+            margin-top: 0.25rem;
+        }
+
+        .audio-visualizer {
+            height: 60px;
+            background: #f0f0f0;
+            border-radius: 10px;
+            margin: 1rem 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .audio-bars {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+        }
+
+        .audio-bar {
+            width: 3px;
+            background: linear-gradient(to top, #2196F3, #64B5F6);
+            border-radius: 2px;
+            transition: height 0.1s ease;
+        }
+
+        .code-editor {
+            width: 100%;
+            height: 200px;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 1rem;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            resize: vertical;
+            background: #f8f8f8;
+        }
+
+        .code-output {
+            width: 100%;
+            height: 150px;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 1rem;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            background: #000;
+            color: #00ff00;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 1rem;
+            margin: 1rem 0;
+        }
+
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            flex: 1;
+        }
+
+        .btn.primary {
+            background: linear-gradient(135deg, #2196F3, #1976D2);
+            color: white;
+        }
+
+        .btn.primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 15px rgba(33, 150, 243, 0.3);
+        }
+
+        .btn.secondary {
+            background: linear-gradient(135deg, #f5f5f5, #e0e0e0);
+            color: #333;
+        }
+
+        .btn.secondary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .stats-panel {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            padding: 1rem;
+            margin-top: 1rem;
+            color: white;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 1rem;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            margin-bottom: 0.25rem;
+        }
+
+        .stat-label {
+            font-size: 0.8rem;
+            opacity: 0.8;
+        }
+
+        .error-message {
+            background: linear-gradient(135deg, #f44336, #d32f2f);
+            color: white;
+            padding: 1rem;
+            border-radius: 10px;
+            margin: 1rem 0;
+            display: none;
+        }
+
+        .success-message {
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+            color: white;
+            padding: 1rem;
+            border-radius: 10px;
+            margin: 1rem 0;
+            display: none;
+        }
+
+        @media (max-width: 768px) {
+            .main-container {
+                flex-direction: column;
+                padding: 1rem;
+            }
+            
+            .voice-button {
+                width: 80px;
+                height: 80px;
+                font-size: 1.5rem;
+            }
+            
+            .conversation-area {
+                height: 300px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🎤 ADK-MCP Voice Assistant</h1>
+        <div class="subtitle">Real-time voice interaction with AI-powered Android development assistance</div>
+    </div>
+
+    <div class="main-container">
+        <div class="voice-panel">
+            <h2>Voice Interaction</h2>
+            
+            <div class="voice-controls">
+                <button id="startVoiceBtn" class="voice-button start" title="Start Voice Session">
+                    🎤
+                </button>
+                <button id="stopVoiceBtn" class="voice-button stop" style="display: none;" title="Stop Voice Session">
+                    🛑
+                </button>
+            </div>
+
+            <div class="status-indicator">
+                <div id="statusDot" class="status-dot disconnected"></div>
+                <span id="statusText">Disconnected</span>
+            </div>
+
+            <div class="audio-visualizer">
+                <div class="audio-bars" id="audioBars">
+                    <!-- Audio visualization bars will be generated here -->
+                </div>
+            </div>
+
+            <div class="conversation-area" id="conversationArea">
+                <div class="message system">
+                    <div>Welcome to ADK-MCP Voice Assistant!</div>
+                    <div class="timestamp">Click the microphone to start</div>
+                </div>
+            </div>
+
+            <div class="error-message" id="errorMessage"></div>
+            <div class="success-message" id="successMessage"></div>
+        </div>
+
+        <div class="code-panel">
+            <h2>Code Execution</h2>
+            
+            <div>
+                <label for="codeEditor">Python Code:</label>
+                <textarea id="codeEditor" class="code-editor" placeholder="# Enter Python code here or use voice commands
+# Example: print('Hello, ADK-MCP!')
+# Try saying: 'Run print hello world'"></textarea>
+            </div>
+
+            <div class="button-group">
+                <button id="executeBtn" class="btn primary">Execute Code</button>
+                <button id="clearCodeBtn" class="btn secondary">Clear</button>
+            </div>
+
+            <div>
+                <label for="codeOutput">Output:</label>
+                <div id="codeOutput" class="code-output"></div>
+            </div>
+
+            <div class="button-group">
+                <button id="clearOutputBtn" class="btn secondary">Clear Output</button>
+                <button id="speakOutputBtn" class="btn secondary">Speak Output</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="stats-panel">
+        <h3>Session Statistics</h3>
+        <div class="stats-grid">
+            <div class="stat-item">
+                <div id="messagesCount" class="stat-value">0</div>
+                <div class="stat-label">Messages</div>
+            </div>
+            <div class="stat-item">
+                <div id="executionsCount" class="stat-value">0</div>
+                <div class="stat-label">Executions</div>
+            </div>
+            <div class="stat-item">
+                <div id="sessionDuration" class="stat-value">00:00</div>
+                <div class="stat-label">Duration</div>
+            </div>
+            <div class="stat-item">
+                <div id="connectionStatus" class="stat-value">●</div>
+                <div class="stat-label">Connection</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="voice_client.js"></script>
+</body>
+</html>

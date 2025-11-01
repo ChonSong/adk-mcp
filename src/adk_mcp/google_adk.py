@@ -23,7 +23,7 @@ class ADKWebConfig:
     project_id: str
     location: str = "us-central1"
     credentials_path: Optional[str] = None
-    model_name: str = "gemini-1.5-pro"
+    model_name: str = "gemini-2.5-pro"
     enable_streaming: bool = True
     max_tokens: int = 1000
     temperature: float = 0.7
@@ -342,7 +342,7 @@ def create_adk_config_from_env() -> ADKWebConfig:
         project_id=os.getenv("GOOGLE_CLOUD_PROJECT", "your-project-id"),
         location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
         credentials_path=os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
-        model_name=os.getenv("ADK_MODEL_NAME", "gemini-1.5-pro"),
+        model_name=os.getenv("ADK_MODEL_NAME", "gemini-2.5-pro"),
         enable_streaming=os.getenv("ADK_ENABLE_STREAMING", "true").lower() == "true",
         max_tokens=int(os.getenv("ADK_MAX_TOKENS", "1000")),
         temperature=float(os.getenv("ADK_TEMPERATURE", "0.7"))
