@@ -11,6 +11,7 @@ from .streaming import BiDirectionalStream, StreamMessage, WebSocketStream
 from .executor import PythonExecutor, SafePythonExecutor
 from .mock_services import MockGoogleCloudServices
 from .mobile.android_webview import AndroidWebViewBridge
+from .google_adk import GoogleADKWebAgent, ADKWebConfig, ADKWebStreamHandler, create_adk_config_from_env
 
 
 class ADKServer:
@@ -23,6 +24,8 @@ class ADKServer:
         websocket_port: int = 8081,
         enable_executor: bool = True,
         enable_mock_services: bool = True,
+        enable_google_adk: bool = True,
+        adk_config: Optional[ADKWebConfig] = None,
     ):
         """
         Initialize ADK server.
@@ -33,6 +36,8 @@ class ADKServer:
             websocket_port: WebSocket server port
             enable_executor: Enable Python code execution
             enable_mock_services: Enable mock Google Cloud services
+            enable_google_adk: Enable Google ADK-Web integration
+            adk_config: Google ADK-Web configuration (uses env vars if None)
         """
         self.host = host
         self.port = port
@@ -44,6 +49,12 @@ class ADKServer:
         self.executor = SafePythonExecutor() if enable_executor else None
         self.mock_services = MockGoogleCloudServices() if enable_mock_services else None
         self.webview_bridge = AndroidWebViewBridge()
+        
+        # Google ADK-Web integration
+        self.google_adk_agent = None
+        if enable_google_adk:
+            config = adk_config or create_adk_config_from_env()
+            self.google_adk_agent = GoogleADKWebAgent(config)
         
         # Active streams
         self.active_streams: Dict[str, WebSocketStream] = {}
@@ -57,6 +68,11 @@ class ADKServer:
         self.app.router.add_post("/api/sentiment", self.handle_sentiment)
         self.app.router.add_post("/api/translate", self.handle_translate)
         self.app.router.add_post("/api/generate", self.handle_generate)
+        
+        # Google ADK-Web endpoints
+        self.app.router.add_post("/adk/chat", self.handle_adk_chat)
+        self.app.router.add_post("/adk/session/start", self.handle_adk_start_session)
+        self.app.router.add_post("/adk/session/end", self.handle_adk_end_session)
     
     async def handle_index(self, request: web.Request) -> web.Response:
         """Handle index page."""
@@ -110,6 +126,17 @@ class ADKServer:
                 <strong>POST /api/generate</strong> - Text generation (mocked)
             </div>
             
+            <h2>Google ADK-Web Endpoints</h2>
+            <div class="endpoint">
+                <strong>POST /adk/chat</strong> - Chat with Google ADK-Web agent
+            </div>
+            <div class="endpoint">
+                <strong>POST /adk/session/start</strong> - Start new conversation session
+            </div>
+            <div class="endpoint">
+                <strong>POST /adk/session/end</strong> - End conversation session
+            </div>
+            
             <h2>WebSocket</h2>
             <p>Connect to <code>ws://localhost:{self.websocket_port}</code> for bidirectional streaming</p>
         </body>
@@ -124,6 +151,8 @@ class ADKServer:
             "active_streams": len(self.active_streams),
             "executor_enabled": self.executor is not None,
             "mock_services_enabled": self.mock_services is not None,
+            "google_adk_enabled": self.google_adk_agent is not None,
+            "active_sessions": len(self.google_adk_agent.active_sessions) if self.google_adk_agent else 0,
         })
     
     async def handle_webview(self, request: web.Request) -> web.Response:
@@ -220,6 +249,86 @@ class ADKServer:
                 status=500
             )
     
+    async def handle_adk_chat(self, request: web.Request) -> web.Response:
+        """Handle chat with Google ADK-Web agent."""
+        if not self.google_adk_agent:
+            return web.json_response(
+                {"error": "Google ADK-Web is not enabled"},
+                status=400
+            )
+        
+        try:
+            data = await request.json()
+            message = data.get("message", "")
+            session_id = data.get("session_id")
+            
+            if not session_id:
+                # Create new session if none provided
+                session_id = self.google_adk_agent.create_session()
+            
+            response = await self.google_adk_agent.process_message(message, session_id)
+            return web.json_response(response.to_dict())
+            
+        except Exception as e:
+            return web.json_response(
+                {"error": str(e)},
+                status=500
+            )
+    
+    async def handle_adk_start_session(self, request: web.Request) -> web.Response:
+        """Start new ADK-Web conversation session."""
+        if not self.google_adk_agent:
+            return web.json_response(
+                {"error": "Google ADK-Web is not enabled"},
+                status=400
+            )
+        
+        try:
+            data = await request.json()
+            user_id = data.get("user_id")
+            
+            session_id = self.google_adk_agent.create_session(user_id)
+            return web.json_response({
+                "session_id": session_id,
+                "status": "started"
+            })
+            
+        except Exception as e:
+            return web.json_response(
+                {"error": str(e)},
+                status=500
+            )
+    
+    async def handle_adk_end_session(self, request: web.Request) -> web.Response:
+        """End ADK-Web conversation session."""
+        if not self.google_adk_agent:
+            return web.json_response(
+                {"error": "Google ADK-Web is not enabled"},
+                status=400
+            )
+        
+        try:
+            data = await request.json()
+            session_id = data.get("session_id")
+            
+            if not session_id:
+                return web.json_response(
+                    {"error": "session_id is required"},
+                    status=400
+                )
+            
+            self.google_adk_agent.close_session(session_id)
+            return web.json_response({
+                "session_id": session_id,
+                "status": "ended"
+            })
+            
+        except Exception as e:
+            return web.json_response(
+                {"error": str(e)},
+                status=500
+            )
+    
     async def handle_websocket(self, websocket: WebSocketServerProtocol):
         """Handle WebSocket connection for bidirectional streaming."""
         stream = WebSocketStream(websocket)
@@ -229,17 +338,22 @@ class ADKServer:
             await stream.start()
             
             # Set up message handler
-            async def handle_message(message: StreamMessage):
-                # Echo message back for demo
-                response = StreamMessage(
-                    id=message.id + "_response",
-                    content=f"Received: {message.content}",
-                    timestamp=message.timestamp,
-                    message_type="text"
-                )
-                await stream.send_queue.put(response)
-            
-            stream.handler.register_handler("text", handle_message)
+            if self.google_adk_agent:
+                # Use Google ADK-Web handler
+                adk_handler = ADKWebStreamHandler(self.google_adk_agent)
+                stream.handler = adk_handler
+            else:
+                # Fallback to echo handler
+                async def handle_message(message: StreamMessage):
+                    response = StreamMessage(
+                        id=message.id + "_response",
+                        content=f"Received: {message.content}",
+                        timestamp=message.timestamp,
+                        message_type="text"
+                    )
+                    await stream.send_queue.put(response)
+                
+                stream.handler.register_handler("text", handle_message)
             
             # Start listening
             await stream.start_websocket_listener()
@@ -259,6 +373,10 @@ class ADKServer:
     
     async def start(self):
         """Start the server."""
+        # Initialize Google ADK-Web agent if enabled
+        if self.google_adk_agent:
+            await self.google_adk_agent.initialize()
+        
         # Start HTTP server
         runner = web.AppRunner(self.app)
         await runner.setup()
@@ -268,6 +386,10 @@ class ADKServer:
         print(f"ADK-MCP Server started")
         print(f"HTTP server: http://{self.host}:{self.port}")
         print(f"WebSocket server: ws://{self.host}:{self.websocket_port}")
+        if self.google_adk_agent:
+            print(f"Google ADK-Web: Enabled")
+        else:
+            print(f"Google ADK-Web: Disabled")
         
         # Start WebSocket server
         await self.start_websocket_server()

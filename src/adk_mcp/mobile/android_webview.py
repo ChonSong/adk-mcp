@@ -201,7 +201,8 @@ class AndroidWebViewBridge:
                             id: Date.now().toString(),
                             content: content,
                             timestamp: new Date().toISOString(),
-                            message_type: 'text'
+                            message_type: 'text',
+                            metadata: window.currentSessionId ? {{ session_id: window.currentSessionId }} : {{}}
                         }};
                         
                         {self.interface_name}.sendMessage(message);
@@ -209,6 +210,20 @@ class AndroidWebViewBridge:
                         messageInput.value = '';
                     }}
                 }}
+                
+                // Auto-start session on load
+                window.addEventListener('load', function() {{
+                    if ({self.interface_name}.isConnected()) {{
+                        const startSessionMsg = {{
+                            id: Date.now().toString(),
+                            content: 'start_session',
+                            timestamp: new Date().toISOString(),
+                            message_type: 'start_session',
+                            metadata: {{ user_id: 'webview_user' }}
+                        }};
+                        {self.interface_name}.sendMessage(startSessionMsg);
+                    }}
+                }});
                 
                 sendButton.addEventListener('click', sendMessage);
                 messageInput.addEventListener('keypress', function(e) {{
@@ -220,6 +235,15 @@ class AndroidWebViewBridge:
                 // Set up message handler
                 {self.interface_name}.setMessageHandler(function(message) {{
                     addMessage(message.content, false);
+                    
+                    // Handle session management
+                    if (message.message_type === 'session_start') {{
+                        window.currentSessionId = message.metadata.session_id;
+                        statusDiv.textContent = 'Connected to Google ADK-Web (Session: ' + window.currentSessionId.substring(0, 8) + '...)';
+                    }} else if (message.message_type === 'session_end') {{
+                        window.currentSessionId = null;
+                        statusDiv.textContent = 'Session ended';
+                    }}
                 }});
                 
                 // Update connection status

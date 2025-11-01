@@ -1,3 +1,13 @@
-asyncio>=3.4.3
-websockets>=10.0
+# Google ADK-Web dependencies
+google-cloud-aiplatform>=1.38.0
+google-auth>=2.15.0
+google-auth-oauthlib>=0.8.0
+google-auth-httplib2>=0.1.0
+
+# Web framework dependencies
 aiohttp>=3.8.0
+websockets>=10.0
+
+# Additional dependencies for ADK-Web integration
+requests>=2.28.0
+numpy>=1.21.0

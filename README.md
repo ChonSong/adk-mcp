@@ -1,28 +1,34 @@
 # ADK-MCP (Agent Development Kit - MCP)
 
-A comprehensive Agent Development Kit with bidirectional streaming support, designed for building interactive AI agents with real-time coaddmmunication capabilities.
+A comprehensive Agent Development Kit with Google ADK-Web integration and bidirectional streaming support, designed for building interactive AI agents with real-time communication capabilities powered by Google's conversational AI framework.
 
 ## Features
 
 ### Core Capabilities
+- **Google ADK-Web Integration**: Native integration with Google's Agent Development Kit for Web, providing advanced conversational AI capabilities
 - **Bidirectional Streaming**: Real-time text-based communication using WebSocket and async queues
+- **Conversation Management**: Session-based conversations with context preservation and history tracking
 - **Python Code Execution**: Server-side Python execution with safety checks (subprocess-based)
-- **Google Cloud Services**: Integration with Google Cloud AI services, with a mock provider for local development.
+- **Google Cloud AI Services**: Integration with Vertex AI, Gemini models, and other Google Cloud AI services
+  - Advanced text generation with Gemini models
+  - Conversation context management
+  - Streaming responses for real-time interaction
+- **Fallback Mock Services**: Mock providers for development without Google Cloud credentials
   - Sentiment Analysis
   - Text Translation
   - Text Generation
-  - Speech-to-Text & Text-to-Speech
-- **Extensible Message Handling**: Use `StreamHandler` to register custom handlers for different message types.
-- **API Request History**: Track mock service API calls for debugging and analysis.
-- **Interactive WebView UI**: A pre-built, chat-like HTML interface for the Android WebView.
-- **Health Check Endpoint**: Monitor server status and active connections via a `/health` endpoint.
-- **Android WebView Support**: Ready-to-use bridge for mobile integration
+- **Extensible Message Handling**: Use `StreamHandler` to register custom handlers for different message types
+- **Interactive WebView UI**: A pre-built, chat-like HTML interface optimized for Google ADK-Web
+- **Health Check Endpoint**: Monitor server status, active connections, and ADK-Web sessions
+- **Android WebView Support**: Ready-to-use bridge for mobile integration with session management
 
 ### Architecture
-- **Modality**: Text-only (voice capabilities can be added later)
-- **Credentials**: Supports Google Cloud service account credentials, with a fallback to mocked APIs.
-- **Mobile**: WebView wrapper for Android
-- **Execution**: Simple subprocess-based Python execution (Docker sandbox planned for future)
+- **AI Framework**: Built on Google ADK-Web for advanced conversational AI capabilities
+- **Modality**: Text-based conversations with streaming support (voice capabilities can be added)
+- **Authentication**: Google Cloud service account credentials with automatic fallback to mock responses
+- **Session Management**: Persistent conversation sessions with context and history tracking
+- **Mobile**: WebView wrapper for Android with ADK-Web session integration
+- **Execution**: Secure subprocess-based Python execution (Docker sandbox planned for future)
 
 ## Installation
 
@@ -38,9 +44,66 @@ pip install -e .
 pip install -e ".[dev]"
 ```
 
+## Google ADK-Web Configuration
+
+### Prerequisites
+1. **Google Cloud Project**: Create a project in Google Cloud Console
+2. **Enable APIs**: Enable Vertex AI API and other required services
+3. **Service Account**: Create a service account with appropriate permissions
+4. **Credentials**: Download the service account key JSON file
+
+### Environment Variables
+Set the following environment variables for Google ADK-Web integration:
+
+```bash
+# Required
+export GOOGLE_CLOUD_PROJECT="your-project-id"
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
+
+# Optional (with defaults)
+export GOOGLE_CLOUD_LOCATION="us-central1"
+export ADK_MODEL_NAME="gemini-1.5-pro"
+export ADK_MAX_TOKENS="1000"
+export ADK_TEMPERATURE="0.7"
+export ADK_ENABLE_STREAMING="true"
+```
+
+### Without Google Cloud Credentials
+The system automatically falls back to mock responses when Google Cloud credentials are not available, making it perfect for development and testing.
+
 ## Quick Start
 
-### 1. Basic Bidirectional Streaming
+### 1. Google ADK-Web Conversation
+
+```python
+import asyncio
+from adk_mcp.google_adk import GoogleADKWebAgent, ADKWebConfig
+
+async def main():
+    # Configure Google ADK-Web
+    config = ADKWebConfig(
+        project_id="your-project-id",
+        model_name="gemini-1.5-pro"
+    )
+    
+    # Initialize agent
+    agent = GoogleADKWebAgent(config)
+    await agent.initialize()
+    
+    # Create conversation session
+    session_id = agent.create_session(user_id="demo_user")
+    
+    # Chat with the agent
+    response = await agent.process_message("Hello! Tell me about Google ADK-Web.", session_id)
+    print(response.content)
+    
+    # Clean up
+    agent.close_session(session_id)
+
+asyncio.run(main())
+```
+
+### 2. Basic Bidirectional Streaming
 
 ```python
 import asyncio
@@ -164,12 +227,39 @@ Translate text
 ```
 
 #### `POST /api/generate`
-Generate text
+Generate text (mock service)
 ```json
 {
   "prompt": "Tell me about AI",
   "max_tokens": 100,
   "temperature": 0.7
+}
+```
+
+### Google ADK-Web Endpoints
+
+#### `POST /adk/chat`
+Chat with Google ADK-Web agent
+```json
+{
+  "message": "Hello, how can you help me?",
+  "session_id": "optional-session-id"
+}
+```
+
+#### `POST /adk/session/start`
+Start new conversation session
+```json
+{
+  "user_id": "optional-user-id"
+}
+```
+
+#### `POST /adk/session/end`
+End conversation session
+```json
+{
+  "session_id": "session-id-to-end"
 }
 ```
 
@@ -250,10 +340,19 @@ class ADKWebInterface(
 
 ## Examples
 
-Run the example scripts to see ADK-MCP in action:
+Run the example scripts to see ADK-MCP with Google ADK-Web in action:
 
 ```bash
-# Basic streaming
+# Google ADK-Web integration demo
+python examples/google_adk_demo.py
+
+# Full server with Google ADK-Web
+python examples/run_server.py
+
+# WebSocket client with ADK-Web
+python examples/adk_websocket_client.py
+
+# Basic streaming (legacy)
 python examples/basic_streaming.py
 
 # Python execution
@@ -261,9 +360,6 @@ python examples/python_execution.py
 
 # Mock services
 python examples/mock_services_demo.py
-
-# Full server
-python examples/run_server.py
 ```
 
 ## Testing
