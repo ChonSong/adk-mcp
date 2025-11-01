@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice AI Assistant - ADK-MCP</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%);
+            color: white;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Main Container */
+        .voice-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+            position: relative;
+        }
+
+        /* Connection Status Bar */
+        .status-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            z-index: 1000;
+        }
+
+        .status-bar.connected {
+            background: linear-gradient(90deg, #4CAF50, #45a049);
+        }
+
+        .status-bar.connecting {
+            background: linear-gradient(90deg, #ff9800, #f57c00);
+            animation: pulse 1s infinite;
+        }
+
+        .status-bar.error {
+            background: linear-gradient(90deg, #f44336, #d32f2f);
+            animation: blink 0.5s infinite;
+        }
+
+        /* Audio Visualizer */
+        .audio-visualizer {
+            width: 300px;
+            height: 120px;
+            margin-bottom: 3rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 3px;
+            opacity: 0.7;
+            transition: opacity 0.3s ease;
+        }
+
+        .audio-visualizer.active {
+            opacity: 1;
+        }
+
+        .audio-bar {
+            width: 4px;
+            background: linear-gradient(to top, #64B5F6, #2196F3);
+            border-radius: 2px;
+            transition: height 0.1s ease;
+            min-height: 4px;
+        }
+
+        /* Main Microphone Button */
+        .mic-container {
+            position: relative;
+            margin-bottom: 2rem;
+        }
+
+        .mic-button {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            font-size: 3rem;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .mic-button.idle {
+            background: rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.7);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .mic-button.idle:hover {
+            background: rgba(255, 255, 255, 0.15);
+            transform: scale(1.05);
+        }
+
+        .mic-button.listening {
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+            color: white;
+            animation: listening-pulse 2s infinite;
+            box-shadow: 0 0 30px rgba(76, 175, 80, 0.5);
+        }
+
+        .mic-button.processing {
+            background: linear-gradient(135deg, #2196F3, #1976D2);
+            color: white;
+            animation: processing-spin 1s linear infinite;
+        }
+
+        .mic-button.speaking {
+            background: linear-gradient(135deg, #9C27B0, #7B1FA2);
+            color: white;
+            animation: speaking-pulse 1s infinite;
+        }
+
+        .mic-button.error {
+            background: linear-gradient(135deg, #f44336, #d32f2f);
+            color: white;
+            animation: error-shake 0.5s ease-in-out;
+        }
+
+        /* Status Text */
+        .status-text {
+            font-size: 1.2rem;
+            font-weight: 300;
+            text-align: center;
+            margin-bottom: 2rem;
+            opacity: 0.8;
+            min-height: 1.5rem;
+        }
+
+        .status-text.listening {
+            color: #4CAF50;
+            animation: text-glow 2s infinite;
+        }
+
+        .status-text.processing {
+            color: #2196F3;
+        }
+
+        .status-text.speaking {
+            color: #9C27B0;
+        }
+
+        .status-text.error {
+            color: #f44336;
+        }
+
+        /* Conversation Transcript (Collapsible) */
+        .transcript-container {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(20px);
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            transform: translateY(100%);
+            transition: transform 0.3s ease;
+            max-height: 40vh;
+            overflow-y: auto;
+        }
+
+        .transcript-container.visible {
+            transform: translateY(0);
+        }
+
+        .transcript-header {
+            padding: 1rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+        }
+
+        .transcript-content {
+            padding: 1rem;
+            max-height: 30vh;
+            overflow-y: auto;
+        }
+
+        .message {
+            margin-bottom: 1rem;
+            padding: 0.75rem;
+            border-radius: 12px;
+            max-width: 80%;
+            word-wrap: break-word;
+        }
+
+        .message.user {
+            background: rgba(33, 150, 243, 0.2);
+            margin-left: auto;
+            text-align: right;
+        }
+
+        .message.assistant {
+            background: rgba(255, 255, 255, 0.1);
+            margin-right: auto;
+        }
+
+        .message.system {
+            background: rgba(255, 152, 0, 0.2);
+            text-align: center;
+            margin: 0 auto;
+            font-size: 0.9rem;
+        }
+
+        /* Settings Panel */
+        .settings-button {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            cursor: pointer;
+            font-size: 1.2rem;
+            transition: all 0.3s ease;
+        }
+
+        .settings-button:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        /* Error/Success Messages */
+        .message-overlay {
+            position: fixed;
+            top: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 1rem 2rem;
+            border-radius: 8px;
+            font-weight: 500;
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .message-overlay.visible {
+            opacity: 1;
+        }
+
+        .message-overlay.error {
+            background: rgba(244, 67, 54, 0.9);
+            color: white;
+        }
+
+        .message-overlay.success {
+            background: rgba(76, 175, 80, 0.9);
+            color: white;
+        }
+
+        /* Latency Indicator */
+        .latency-indicator {
+            position: fixed;
+            top: 1rem;
+            left: 1rem;
+            font-size: 0.8rem;
+            opacity: 0.6;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+        }
+
+        /* Animations */
+        @keyframes listening-pulse {
+            0%, 100% { transform: scale(1); box-shadow: 0 0 30px rgba(76, 175, 80, 0.5); }
+            50% { transform: scale(1.05); box-shadow: 0 0 40px rgba(76, 175, 80, 0.8); }
+        }
+
+        @keyframes processing-spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        @keyframes speaking-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        @keyframes error-shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+
+        @keyframes text-glow {
+            0%, 100% { text-shadow: 0 0 10px rgba(76, 175, 80, 0.5); }
+            50% { text-shadow: 0 0 20px rgba(76, 175, 80, 0.8); }
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
+        /* Mobile Optimizations */
+        @media (max-width: 768px) {
+            .voice-container {
+                padding: 1rem;
+            }
+
+            .mic-button {
+                width: 100px;
+                height: 100px;
+                font-size: 2.5rem;
+            }
+
+            .audio-visualizer {
+                width: 250px;
+                height: 80px;
+            }
+
+            .status-text {
+                font-size: 1rem;
+            }
+
+            .transcript-container {
+                max-height: 50vh;
+            }
+        }
+
+        /* Accessibility */
+        @media (prefers-reduced-motion: reduce) {
+            * {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+
+        /* High contrast mode */
+        @media (prefers-contrast: high) {
+            .mic-button.idle {
+                border: 3px solid white;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Connection Status Bar -->
+    <div class="status-bar" id="statusBar"></div>
+
+    <!-- Latency Indicator -->
+    <div class="latency-indicator" id="latencyIndicator">
+        Latency: --ms
+    </div>
+
+    <!-- Settings Button -->
+    <button class="settings-button" id="settingsBtn" title="Settings">
+        ⚙️
+    </button>
+
+    <!-- Main Voice Interface -->
+    <div class="voice-container">
+        <!-- Audio Visualizer -->
+        <div class="audio-visualizer" id="audioVisualizer">
+            <!-- Audio bars will be generated by JavaScript -->
+        </div>
+
+        <!-- Main Microphone Button -->
+        <div class="mic-container">
+            <button class="mic-button idle" id="micButton" title="Click to start voice session">
+                🎤
+            </button>
+        </div>
+
+        <!-- Status Text -->
+        <div class="status-text" id="statusText">
+            Tap microphone to start
+        </div>
+    </div>
+
+    <!-- Conversation Transcript (Collapsible) -->
+    <div class="transcript-container" id="transcriptContainer">
+        <div class="transcript-header" id="transcriptHeader">
+            <span>Conversation</span>
+            <span>▼</span>
+        </div>
+        <div class="transcript-content" id="transcriptContent">
+            <div class="message system">
+                Welcome to Voice AI Assistant
+            </div>
+        </div>
+    </div>
+
+    <!-- Message Overlay -->
+    <div class="message-overlay" id="messageOverlay"></div>
+
+    <script src="voice_first_client.js"></script>
+</body>
+</html>

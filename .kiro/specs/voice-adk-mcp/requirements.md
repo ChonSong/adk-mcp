@@ -7,13 +7,20 @@ This document specifies the requirements for enhancing the existing ADK-MCP (Age
 ## Glossary
 
 - **ADK-MCP Server**: The main server application providing Agent Development Kit functionality with Model Context Protocol support
-- **Google ADK-Web**: Google's Agent Development Kit for web-based AI interactions with voice capabilities
-- **Bidirectional Streaming**: Real-time, two-way audio communication allowing interruptions and natural conversation flow
-- **Live API**: Google's real-time voice API supporting streaming speech-to-text and text-to-speech
-- **WebSocket Connection**: Persistent connection for real-time audio streaming between client and server
-- **Audio Worklet**: Browser API for low-latency audio processing
-- **Code Execution Tool**: Server-side capability to execute Python code safely
-- **Session Context**: Maintained conversation state across multiple voice interactions
+- **Google ADK**: Google's Agent Development Kit providing LlmAgent, Runner, and Live API integration
+- **Runner.run_live()**: ADK's built-in method for starting bidirectional streaming sessions
+- **LiveRequestQueue**: ADK's prebuilt component for buffering and sequencing real-time user messages
+- **LlmAgent**: ADK's core agent class with built-in tool integration and streaming support
+- **SessionService**: ADK's session management system (InMemorySessionService, VertexAiSessionService)
+- **ArtifactService**: ADK's system for managing binary data like audio clips
+- **MemoryService**: ADK's long-term knowledge system with VertexAiRagMemoryService
+- **RunConfig**: ADK's configuration class for streaming behavior and modalities
+- **FunctionTool**: ADK's automatic wrapper for Python functions as agent tools
+- **BuiltInCodeExecutor**: ADK's prebuilt safe code execution tool
+- **ArtifactService**: ADK's binary data management with GcsArtifactService for production
+- **OpenInference Instrumentation**: ADK's built-in observability with Arize AX/Phoenix integration
+- **Callback System**: ADK's hooks for input guardrails, output sanitization, and LLM safety filters
+- **VertexAiSessionService**: ADK's production-ready session persistence service
 
 ## Requirements
 
@@ -23,11 +30,11 @@ This document specifies the requirements for enhancing the existing ADK-MCP (Age
 
 #### Acceptance Criteria
 
-1. WHEN the user clicks "Start Audio", THE ADK-MCP Server SHALL establish a WebSocket connection for audio streaming
-2. WHILE the microphone is active, THE ADK-MCP Server SHALL continuously process incoming audio chunks
-3. WHEN audio is received, THE ADK-MCP Server SHALL convert speech to text using Google Live API
-4. WHEN the user speaks, THE ADK-MCP Server SHALL generate appropriate AI responses using gemini-2.5-pro
-5. WHEN generating responses, THE ADK-MCP Server SHALL convert text to speech and stream audio back to the client
+1. WHEN the user clicks "Start Audio", THE ADK-MCP Server SHALL use Runner.run_live() to establish bidirectional streaming
+2. WHILE the session is active, THE ADK-MCP Server SHALL utilize LiveRequestQueue for processing audio chunks
+3. WHEN audio is received, THE ADK-MCP Server SHALL leverage ADK's built-in Live API integration for speech processing
+4. WHEN the user speaks, THE ADK-MCP Server SHALL use LlmAgent with gemini-2.5-pro for intelligent responses
+5. WHEN generating responses, THE ADK-MCP Server SHALL use RunConfig with AUDIO modality for text-to-speech streaming
 
 ### Requirement 2
 
@@ -46,11 +53,11 @@ This document specifies the requirements for enhancing the existing ADK-MCP (Age
 
 #### Acceptance Criteria
 
-1. WHEN the user requests code execution via voice, THE ADK-MCP Server SHALL parse the code execution intent
-2. WHEN code execution is requested, THE ADK-MCP Server SHALL execute Python code using the Code Execution Tool
-3. WHEN code execution completes, THE ADK-MCP Server SHALL capture both output and errors
-4. WHEN providing results, THE ADK-MCP Server SHALL speak the execution results back to the user
-5. WHERE code execution fails, THE ADK-MCP Server SHALL provide error information via voice response
+1. WHEN the user requests code execution via voice, THE ADK-MCP Server SHALL use LlmAgent's built-in tool routing to identify code execution intent
+2. WHEN code execution is requested, THE ADK-MCP Server SHALL utilize BuiltInCodeExecutor as a FunctionTool
+3. WHEN code execution completes, THE ADK-MCP Server SHALL use ADK's automatic result handling for output and errors
+4. WHEN providing results, THE ADK-MCP Server SHALL leverage RunConfig AUDIO modality to speak execution results
+5. WHERE code execution fails, THE ADK-MCP Server SHALL use ADK's error handling callbacks for voice error responses
 
 ### Requirement 4
 
@@ -81,11 +88,11 @@ This document specifies the requirements for enhancing the existing ADK-MCP (Age
 
 #### Acceptance Criteria
 
-1. WHEN the server starts, THE ADK-MCP Server SHALL authenticate using Google Cloud service account credentials
-2. WHEN authentication succeeds, THE ADK-MCP Server SHALL initialize connection to Vertex AI with gemini-2.5-pro model
-3. WHEN authentication fails, THE ADK-MCP Server SHALL log appropriate error messages and gracefully degrade
-4. WHILE operating, THE ADK-MCP Server SHALL maintain secure communication with Google Cloud APIs
-5. WHERE credentials are invalid, THE ADK-MCP Server SHALL provide clear error messages for troubleshooting
+1. WHEN the server starts, THE ADK-MCP Server SHALL use ADK's built-in Google Cloud authentication
+2. WHEN authentication succeeds, THE ADK-MCP Server SHALL initialize LlmAgent with "gemini-2.5-pro" model string
+3. WHEN authentication fails, THE ADK-MCP Server SHALL use ADK's error handling and graceful degradation
+4. WHILE operating, THE ADK-MCP Server SHALL leverage ADK's automatic Google Cloud API management
+5. WHERE credentials are invalid, THE ADK-MCP Server SHALL utilize ADK's built-in error reporting and logging
 
 ### Requirement 7
 
@@ -93,11 +100,11 @@ This document specifies the requirements for enhancing the existing ADK-MCP (Age
 
 #### Acceptance Criteria
 
-1. WHEN a voice session starts, THE ADK-MCP Server SHALL create a new conversation context
-2. WHILE the session is active, THE ADK-MCP Server SHALL maintain conversation history
-3. WHEN processing new voice input, THE ADK-MCP Server SHALL include relevant conversation context
-4. WHEN the session ends, THE ADK-MCP Server SHALL properly clean up conversation resources
-5. WHERE session timeout occurs, THE ADK-MCP Server SHALL gracefully handle context cleanup
+1. WHEN a voice session starts, THE ADK-MCP Server SHALL use SessionService to create a new Session
+2. WHILE the session is active, THE ADK-MCP Server SHALL utilize session.state for conversation history
+3. WHEN processing new voice input, THE ADK-MCP Server SHALL leverage ADK's automatic context management
+4. WHEN the session ends, THE ADK-MCP Server SHALL use SessionService lifecycle management for cleanup
+5. WHERE session timeout occurs, THE ADK-MCP Server SHALL utilize ADK's built-in session timeout handling
 
 ### Requirement 8
 
@@ -129,8 +136,32 @@ This document specifies the requirements for enhancing the existing ADK-MCP (Age
 
 #### Acceptance Criteria
 
-1. WHEN voice interactions occur, THE ADK-MCP Server SHALL log session events with appropriate detail levels
-2. WHEN errors occur, THE ADK-MCP Server SHALL log error details with context for debugging
-3. WHILE processing audio, THE ADK-MCP Server SHALL monitor performance metrics
-4. WHEN system resources are stressed, THE ADK-MCP Server SHALL log performance warnings
-5. WHERE debugging is needed, THE ADK-MCP Server SHALL provide detailed trace information
+1. WHEN voice interactions occur, THE ADK-MCP Server SHALL use OpenInference instrumentation for automatic trace collection
+2. WHEN errors occur, THE ADK-MCP Server SHALL leverage ADK's built-in error logging with Arize AX/Phoenix integration
+3. WHILE processing audio, THE ADK-MCP Server SHALL utilize ADK's performance monitoring capabilities
+4. WHEN system resources are stressed, THE ADK-MCP Server SHALL use RunConfig max_llm_calls for cost and resource governance
+5. WHERE debugging is needed, THE ADK-MCP Server SHALL provide ADK's detailed execution traces and tool call monitoring
+
+### Requirement 11
+
+**User Story:** As an enterprise user, I want the system to integrate with external knowledge bases and enterprise systems, so that the AI agent can access relevant business information.
+
+#### Acceptance Criteria
+
+1. WHEN the agent needs external knowledge, THE ADK-MCP Server SHALL use VertexAiRagMemoryService for RAG capabilities
+2. WHEN binary data is processed, THE ADK-MCP Server SHALL utilize ArtifactService with GcsArtifactService for persistence
+3. WHEN integrating with REST APIs, THE ADK-MCP Server SHALL use OpenAPIToolset for automatic tool generation
+4. WHEN accessing Google Cloud services, THE ADK-MCP Server SHALL leverage ApplicationIntegrationToolset for enterprise connectors
+5. WHERE long-term memory is needed, THE ADK-MCP Server SHALL use load_memory tool with MemoryService integration
+
+### Requirement 12
+
+**User Story:** As a security administrator, I want advanced safety controls and guardrails, so that the AI agent operates within defined safety boundaries.
+
+#### Acceptance Criteria
+
+1. WHEN processing user input, THE ADK-MCP Server SHALL use before_model_callback for input validation and guardrails
+2. WHEN generating responses, THE ADK-MCP Server SHALL use after_model_callback for output sanitization
+3. WHEN safety validation is needed, THE ADK-MCP Server SHALL use dedicated LLM guardrails with Gemini Flash Lite in callbacks
+4. WHEN tool execution occurs, THE ADK-MCP Server SHALL use before_tool_callback and after_tool_callback for policy enforcement
+5. WHERE production deployment is required, THE ADK-MCP Server SHALL use VertexAiSessionService for scalable session persistence

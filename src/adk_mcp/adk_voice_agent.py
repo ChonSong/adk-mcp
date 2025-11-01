@@ -1,4 +1,4 @@
-"""Enhanced Google ADK Voice Agent with multi-agent system and session persistence."""
+"""Enhanced Google ADK Voice Agent with Runner.run_live() integration."""
 
 import asyncio
 import json
@@ -9,89 +9,68 @@ from typing import Dict, Any, Optional, List, AsyncIterator, Callable
 from dataclasses import dataclass, asdict
 
 try:
-    from google_adk import (
-        LlmAgent, 
-        SequentialAgent, 
-        ParallelAgent, 
-        LoopAgent,
-        AgentTool,
-        Session,
-        ToolContext,
-        run_live
-    )
+    from google.adk.agents import LlmAgent
+    from google.adk.runtime import Runner, RunConfig
+    from google.adk.sessions import SessionService, InMemorySessionService
+    from google.adk.tools import BuiltInCodeExecutor, FunctionTool
+    from google.adk.artifacts import ArtifactService, InMemoryArtifactService
     ADK_AVAILABLE = True
 except ImportError:
     # Fallback for when google-adk is not available
     ADK_AVAILABLE = False
     logging.warning("google-adk package not available, using fallback implementation")
 
-from .voice_streaming import VoiceSession, VoiceMessage, AudioChunk
 from .google_adk import GoogleADKWebAgent, ADKWebConfig
-from .live_api_integration import SpeechProcessor
-from .conversation_context import (
-    PersistentConversationContext, 
-    ConversationTurn, 
-    ContextualResponseGenerator
-)
 from .voice_code_executor import VoiceCodeExecutor
 
 
 @dataclass
-class SessionState:
-    """Enhanced session state with structured data storage."""
-    
-    # Core session info
-    session_id: str
-    user_id: Optional[str] = None
-    
-    # Conversation context
-    current_debugging_step: Optional[str] = None
-    current_topic: Optional[str] = None
-    
-    # Code execution context
-    last_code_execution: Optional[Dict[str, Any]] = None
-    execution_history: List[Dict[str, Any]] = None
-    
-    # User preferences (persistent across sessions)
-    preferred_language: str = "python"
-    preferred_android_api_level: Optional[int] = None
-    
-    # Working memory for complex tasks
-    working_memory: Dict[str, Any] = None
+class AudioChunk:
+    """Represents an audio chunk for streaming."""
+    data: bytes
+    timestamp: datetime
+    sequence_number: int
+    sample_rate: int = 16000
+    channels: int = 1
+
+
+@dataclass
+class VoiceMessage:
+    """Voice message in conversation history."""
+    role: str  # "user" or "assistant"
+    content: str
+    audio_data: Optional[bytes] = None
+    timestamp: datetime = None
+    message_type: str = "voice"
     
     def __post_init__(self):
-        if self.execution_history is None:
-            self.execution_history = []
-        if self.working_memory is None:
-            self.working_memory = {}
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for persistence."""
-        return asdict(self)
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'SessionState':
-        """Create from dictionary."""
-        return cls(**data)
+        if self.timestamp is None:
+            self.timestamp = datetime.now(timezone.utc)
 
 
-class EnhancedVoiceSession(VoiceSession):
-    """Enhanced voice session with ADK session integration."""
+class ADKVoiceSession:
+    """Voice session integrated with ADK SessionService."""
     
     def __init__(self, session_id: str, websocket, user_id: Optional[str] = None):
-        super().__init__(session_id, websocket, user_id)
-        self.adk_session: Optional['Session'] = None
-        self.session_state = SessionState(session_id=session_id, user_id=user_id)
-        self.events_log: List[Dict[str, Any]] = []
-        self.conversation_memory = None  # Will be set by context manager
-    
-    async def initialize_adk_session(self):
+        self.session_id = session_id
+        self.user_id = user_id
+        self.websocket = websocket
+        self.adk_session = None
+        self.is_speaking = False
+        self.is_listening = False
+        self.last_activity = datetime.now(timezone.utc)
+        self.conversation_history: List[VoiceMessage] = []
+        self.sequence_number = 0
+        self.runner = None
+        self.live_session = None
+        
+    async def initialize_adk_session(self, session_service: SessionService):
         """Initialize ADK session for persistent context."""
         if ADK_AVAILABLE:
-            self.adk_session = Session(session_id=self.session_id)
+            self.adk_session = await session_service.create_session(self.session_id)
             # Initialize state with user preferences
             if self.user_id:
-                self.adk_session.state[f"user:{self.user_id}:preferred_language"] = self.session_state.preferred_language
+                self.adk_session.state[f"user:{self.user_id}:preferred_language"] = "python"
         
     async def log_event(self, event_type: str, data: Dict[str, Any]):
         """Log event to session for debugging and context."""
@@ -100,352 +79,313 @@ class EnhancedVoiceSession(VoiceSession):
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "data": data
         }
-        self.events_log.append(event)
         
         if self.adk_session and ADK_AVAILABLE:
-            self.adk_session.events.append(event)
+            # Store events in session state
+            events = self.adk_session.state.get("events", [])
+            events.append(event)
+            self.adk_session.state["events"] = events[-50]  # Keep last 50 events
     
-    async def update_state(self, key: str, value: Any):
-        """Update session state."""
-        setattr(self.session_state, key, value)
+    async def add_message(self, message: VoiceMessage):
+        """Add message to conversation history."""
+        self.conversation_history.append(message)
+        self.last_activity = datetime.now(timezone.utc)
         
+        # Store in ADK session state
         if self.adk_session and ADK_AVAILABLE:
-            self.adk_session.state[key] = value
+            messages = self.adk_session.state.get("conversation_history", [])
+            messages.append({
+                "role": message.role,
+                "content": message.content,
+                "timestamp": message.timestamp.isoformat(),
+                "message_type": message.message_type
+            })
+            self.adk_session.state["conversation_history"] = messages[-20]  # Keep last 20 messages
     
-    async def get_state(self, key: str, default: Any = None) -> Any:
-        """Get value from session state."""
-        if self.adk_session and ADK_AVAILABLE:
-            return self.adk_session.state.get(key, default)
-        return getattr(self.session_state, key, default)
+    async def get_next_sequence_number(self) -> int:
+        """Get next sequence number for audio chunks."""
+        self.sequence_number += 1
+        return self.sequence_number
 
 
-class CodeExecutionTool:
-    """Enhanced code execution tool with session state integration."""
+class VoiceCodeExecutionTool:
+    """Voice-aware code execution tool using ADK BuiltInCodeExecutor."""
     
-    def __init__(self, executor):
-        self.executor = executor
+    def __init__(self):
         self.logger = logging.getLogger(__name__)
+        if ADK_AVAILABLE:
+            self.code_executor = BuiltInCodeExecutor()
+        else:
+            self.code_executor = None
     
-    async def execute_code(
-        self, 
-        code: str, 
-        context: Optional['ToolContext'] = None,
-        session: Optional['EnhancedVoiceSession'] = None
-    ) -> Dict[str, Any]:
-        """Execute code with session state integration."""
+    @FunctionTool
+    async def execute_code_with_voice_response(self, code: str, session_id: str) -> dict:
+        """Execute Python code and format results for voice response.
+        
+        Args:
+            code: Python code to execute
+            session_id: Current voice session identifier
+            
+        Returns:
+            dict: Execution result with voice-friendly formatting
+        """
         try:
-            # Execute code using existing executor
-            result = await self.executor.execute(code)
+            if not self.code_executor:
+                return {
+                    "status": "error",
+                    "output": "Code execution not available",
+                    "voice_summary": "Code execution is not available in this environment"
+                }
             
-            # Log execution to session state
-            execution_data = {
-                "code": code,
-                "result": result.to_dict(),
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
+            # Execute code using ADK's BuiltInCodeExecutor
+            result = await self.code_executor.execute(code)
             
-            if session:
-                await session.log_event("code_execution", execution_data)
-                await session.update_state("last_code_execution", execution_data)
-                session.session_state.execution_history.append(execution_data)
-            
-            if context and ADK_AVAILABLE:
-                # Update ADK session state
-                context.session.state["last_code_execution"] = execution_data
-                context.session.state["execution_count"] = context.session.state.get("execution_count", 0) + 1
-            
-            return result.to_dict()
-            
+            # Format for voice response
+            if result.success:
+                voice_summary = self._format_output_for_speech(result.output)
+                return {
+                    "status": "success",
+                    "output": result.output,
+                    "voice_summary": voice_summary
+                }
+            else:
+                voice_summary = f"Code execution failed with error: {result.error}"
+                return {
+                    "status": "error",
+                    "output": result.error,
+                    "voice_summary": voice_summary
+                }
+                
         except Exception as e:
-            error_data = {
-                "code": code,
-                "error": str(e),
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-            
-            if session:
-                await session.log_event("code_execution_error", error_data)
-            
             self.logger.error(f"Code execution failed: {e}")
             return {
-                "success": False,
-                "error": str(e),
-                "output": "",
-                "exit_code": -1
+                "status": "error",
+                "output": str(e),
+                "voice_summary": f"An error occurred during code execution: {str(e)}"
             }
-
-
-class MultiAgentVoiceSystem:
-    """Multi-agent system for complex Android development tasks."""
     
-    def __init__(self, config: ADKWebConfig, code_executor):
+    def _format_output_for_speech(self, output: str) -> str:
+        """Format code output for natural speech."""
+        if not output or output.strip() == "":
+            return "The code executed successfully with no output"
+        
+        # Limit output length for speech
+        if len(output) > 200:
+            return f"The code executed successfully. Output: {output[:200]}... and more"
+        
+        return f"The code executed successfully. Output: {output}"
+
+
+class ADKLiveRunner:
+    """Manages ADK Runner.run_live() sessions for voice streaming."""
+    
+    def __init__(self, config: ADKWebConfig):
         self.config = config
-        self.code_executor = code_executor
         self.logger = logging.getLogger(__name__)
+        self.session_service = InMemorySessionService() if ADK_AVAILABLE else None
+        self.artifact_service = InMemoryArtifactService() if ADK_AVAILABLE else None
         
-        # Initialize tools
-        self.code_execution_tool = CodeExecutionTool(code_executor)
-        self.voice_code_executor = VoiceCodeExecutor(code_executor)
-        
-        # Initialize agents if ADK is available
+        # Initialize voice-enabled agent
         if ADK_AVAILABLE:
-            self._initialize_agents()
+            self.voice_agent = self._create_voice_agent()
+            self.runner = Runner(agent=self.voice_agent)
         else:
-            self.logger.warning("ADK not available, using fallback single agent")
-            self.fallback_agent = GoogleADKWebAgent(config)
+            self.voice_agent = None
+            self.runner = None
     
-    def _initialize_agents(self):
-        """Initialize specialized agents for different tasks."""
-        
-        # 1. Router/Orchestrator Agent
-        self.router_agent = LlmAgent(
-            name="ADK_MCP_Router",
-            model="gemini-2.5-pro",
-            instruction="""You are a router agent for Android development assistance. 
-            Analyze user queries and route them to the appropriate specialist:
-            - Code generation/execution: Use code_expert_tool
-            - Documentation/reference: Use docs_agent_tool  
-            - Debugging/troubleshooting: Use bug_hunter_tool
-            - General conversation: Handle directly
-            
-            Always maintain conversation context and provide helpful responses."""
-        )
-        
-        # 2. Code Execution Agent
-        self.code_expert = LlmAgent(
-            name="Code_Expert",
-            model="gemini-2.5-pro",
-            instruction="""You are an expert Python code generator for Android development.
-            Generate secure, efficient Python code to solve Android development problems.
-            Always use the code_execution_tool to run and verify your code.
-            Store execution results in session state for future reference.""",
-            tools=[self._create_code_execution_tool()]
-        )
-        
-        # 3. Documentation Agent
-        self.docs_agent = LlmAgent(
-            name="ADK_Docs_Agent", 
-            model="gemini-2.5-pro",
-            instruction="""You are an Android documentation expert.
-            Provide accurate, up-to-date information about Android development,
-            ADK features, and best practices. Reference official documentation
-            and provide code examples when helpful."""
-        )
-        
-        # 4. Troubleshooting Agent
-        self.bug_hunter = LlmAgent(
-            name="Bug_Hunter",
-            model="gemini-2.5-pro", 
-            instruction="""You are a debugging specialist for Android development.
-            Analyze error messages, logs, and code to identify issues.
-            Provide step-by-step troubleshooting solutions.
-            Use session state to track debugging progress."""
-        )
-        
-        # Create agent tools
-        self.code_expert_tool = AgentTool(
-            agent=self.code_expert,
-            description="Generate and execute Python code for Android development problems"
-        )
-        
-        self.docs_agent_tool = AgentTool(
-            agent=self.docs_agent,
-            description="Get Android development documentation and reference information"
-        )
-        
-        self.bug_hunter_tool = AgentTool(
-            agent=self.bug_hunter,
-            description="Debug and troubleshoot Android development issues"
-        )
-        
-        # Add tools to router
-        self.router_agent.tools = [
-            self.code_expert_tool,
-            self.docs_agent_tool, 
-            self.bug_hunter_tool
-        ]
-    
-    def _create_code_execution_tool(self):
-        """Create code execution tool for agents."""
-        async def execute_code_func(code: str, context: 'ToolContext') -> str:
-            """Execute Python code with session context."""
-            result = await self.code_execution_tool.execute_code(code, context)
-            
-            if result["success"]:
-                return f"Code executed successfully:\n{result['output']}"
-            else:
-                return f"Code execution failed:\n{result['error']}"
-        
-        return execute_code_func
-    
-    async def create_workflow_agents(self) -> Dict[str, Any]:
-        """Create workflow agents for complex tasks."""
+    def _create_voice_agent(self) -> LlmAgent:
+        """Create LlmAgent with voice capabilities and code execution."""
         if not ADK_AVAILABLE:
-            return {}
+            return None
         
-        # Sequential workflow for code generation and debugging
-        code_debug_workflow = SequentialAgent(
-            name="Code_Debug_Workflow",
-            sub_agents=[
-                self.code_expert,
-                self.bug_hunter
-            ]
+        # Create voice-aware code execution tool
+        code_tool = VoiceCodeExecutionTool()
+        
+        # Create the main voice agent
+        agent = LlmAgent(
+            name="voice_assistant",
+            model="gemini-2.5-pro",
+            instruction="""You are a voice-enabled AI assistant specialized in Android development.
+            
+            You can:
+            - Execute Python code using the execute_code_with_voice_response tool
+            - Provide Android development guidance and troubleshooting
+            - Maintain conversation context across voice interactions
+            
+            When users ask you to run code, use the execute_code_with_voice_response tool.
+            Always provide clear, concise responses suitable for voice interaction.
+            Keep responses under 200 words when possible for better voice experience.""",
+            tools=[code_tool.execute_code_with_voice_response]
         )
         
-        # Parallel workflow for gathering information
-        info_gathering_workflow = ParallelAgent(
-            name="Info_Gathering_Workflow", 
-            sub_agents=[
-                self.docs_agent,
-                self.code_expert
-            ]
-        )
-        
-        # Iterative refinement for debugging
-        debug_refinement_loop = LoopAgent(
-            name="Debug_Refinement_Loop",
-            agent=self.bug_hunter,
-            max_iterations=5,
-            condition=lambda result: "success" in result.lower()
-        )
-        
-        return {
-            "code_debug": code_debug_workflow,
-            "info_gathering": info_gathering_workflow,
-            "debug_loop": debug_refinement_loop
-        }
+        return agent
     
-    async def process_voice_message(
-        self, 
-        message: str, 
-        session: EnhancedVoiceSession
-    ) -> str:
-        """Process voice message through multi-agent system with context."""
+    async def start_live_session(self, session: ADKVoiceSession) -> bool:
+        """Start ADK Runner.run_live() session."""
+        if not ADK_AVAILABLE or not self.runner:
+            self.logger.warning("ADK not available, cannot start live session")
+            return False
+        
         try:
-            await session.log_event("voice_input", {"message": message})
+            # Initialize ADK session
+            await session.initialize_adk_session(self.session_service)
             
-            # First, check if this is a code execution request
-            code_response = await self.voice_code_executor.process_voice_input(message, session)
-            if code_response:
-                await session.log_event("code_execution_response", {"response": code_response})
-                return code_response
+            # Configure RunConfig for BIDI streaming with AUDIO modality
+            run_config = RunConfig(
+                streaming_mode="BIDI",
+                response_modalities=["TEXT", "AUDIO"],
+                speech_config={
+                    "voice": "en-US-Standard-A",
+                    "language_code": "en-US"
+                },
+                max_llm_calls=100,  # Cost governance
+                save_input_blobs_as_artifacts=True
+            )
             
-            # Enhance message with conversation context
-            if session.conversation_memory:
-                enhanced_prompt = self.response_generator.enhance_prompt_with_context(
-                    message, 
-                    session.conversation_memory,
-                    "You are an expert Android development assistant with voice interaction capabilities."
-                )
-            else:
-                enhanced_prompt = message
+            # Start live session
+            session.live_session = await self.runner.run_live(
+                session=session.adk_session,
+                config=run_config
+            )
             
-            if ADK_AVAILABLE and hasattr(self, 'router_agent'):
-                # Use multi-agent system
-                response = await self._process_with_router(enhanced_prompt, session)
-            else:
-                # Fallback to single agent
-                response = await self._process_with_fallback(enhanced_prompt, session)
+            await session.log_event("live_session_started", {
+                "session_id": session.session_id,
+                "streaming_mode": "BIDI",
+                "response_modalities": ["TEXT", "AUDIO"]
+            })
             
-            # Add conversation turn to memory
-            if session.conversation_memory:
-                turn = ConversationTurn(
-                    turn_id=str(uuid.uuid4()),
-                    user_input=message,
-                    assistant_response=response,
-                    timestamp=datetime.now(timezone.utc)
-                )
-                await session.conversation_memory.add_turn(turn)
+            self.logger.info(f"Started ADK live session: {session.session_id}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to start live session: {e}")
+            await session.log_event("live_session_error", {"error": str(e)})
+            return False
+    
+    async def process_audio_chunk(self, session: ADKVoiceSession, audio_chunk: AudioChunk) -> Optional[str]:
+        """Process audio chunk through ADK LiveRequestQueue."""
+        if not session.live_session:
+            return None
+        
+        try:
+            # Send audio to LiveRequestQueue
+            await session.live_session.send_audio(audio_chunk.data)
+            
+            # Check for transcription
+            transcription = await session.live_session.get_transcription()
+            
+            if transcription:
+                await session.log_event("transcription_received", {
+                    "transcription": transcription,
+                    "audio_size": len(audio_chunk.data)
+                })
                 
-                # Extract and update context
-                context_updates = self.response_generator.extract_context_updates(response)
-                for key, value in context_updates.items():
-                    session.conversation_memory.update_working_memory(key, value)
+                # Add to conversation history
+                voice_message = VoiceMessage(
+                    role="user",
+                    content=transcription,
+                    audio_data=audio_chunk.data
+                )
+                await session.add_message(voice_message)
             
-            await session.log_event("voice_response", {"response": response})
-            return response
-            
-        except Exception as e:
-            self.logger.error(f"Error processing voice message: {e}")
-            return f"I encountered an error processing your request: {str(e)}"
-    
-    async def _process_with_router(self, message: str, session: EnhancedVoiceSession) -> str:
-        """Process message using router agent."""
-        try:
-            # Create context with session state
-            context = ToolContext(session=session.adk_session) if session.adk_session else None
-            
-            # Route message through main agent
-            response = await self.router_agent.process(message, context=context)
-            return response
+            return transcription
             
         except Exception as e:
-            self.logger.error(f"Router agent error: {e}")
-            return await self._process_with_fallback(message, session)
+            self.logger.error(f"Error processing audio chunk: {e}")
+            return None
     
-    async def _process_with_fallback(self, message: str, session: EnhancedVoiceSession) -> str:
-        """Fallback processing with single agent."""
-        if hasattr(self, 'fallback_agent'):
-            response = await self.fallback_agent.process_message(message, session.session_id)
-            return response.content
-        else:
-            return "I'm having trouble processing your request right now. Please try again."
-    
-    async def handle_code_execution_request(
-        self, 
-        code: str, 
-        session: EnhancedVoiceSession
-    ) -> str:
-        """Handle direct code execution request."""
-        result = await self.code_execution_tool.execute_code(code, session=session)
+    async def generate_response(self, session: ADKVoiceSession, text: str) -> AsyncIterator[bytes]:
+        """Generate voice response using ADK's AUDIO modality."""
+        if not session.live_session:
+            return
         
-        if result["success"]:
-            return f"Code executed successfully. Output: {result['output']}"
-        else:
-            return f"Code execution failed with error: {result['error']}"
+        try:
+            # Send text to agent for processing
+            response = await session.live_session.send_message(text)
+            
+            # Add assistant response to conversation history
+            voice_message = VoiceMessage(
+                role="assistant",
+                content=response.text if hasattr(response, 'text') else str(response)
+            )
+            await session.add_message(voice_message)
+            
+            # Stream audio response
+            if hasattr(response, 'audio_stream'):
+                async for audio_chunk in response.audio_stream:
+                    if audio_chunk:
+                        yield audio_chunk
+            else:
+                # Fallback: generate mock audio
+                yield self._generate_mock_audio(str(response))
+                
+        except Exception as e:
+            self.logger.error(f"Error generating response: {e}")
+            yield self._generate_mock_audio("I encountered an error processing your request.")
     
-    async def get_session_context(self, session: EnhancedVoiceSession) -> Dict[str, Any]:
-        """Get comprehensive session context for debugging."""
-        return {
-            "session_id": session.session_id,
-            "state": session.session_state.to_dict(),
-            "events_count": len(session.events_log),
-            "conversation_length": len(session.conversation_history),
-            "last_activity": session.last_activity.isoformat()
-        }
+    async def handle_interruption(self, session: ADKVoiceSession):
+        """Handle voice interruption using ADK's interruption support."""
+        if not session.live_session:
+            return
+        
+        try:
+            # Use ADK's graceful stream stopping
+            await session.live_session.interrupt()
+            session.is_speaking = False
+            
+            await session.log_event("interruption_handled", {
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+            
+        except Exception as e:
+            self.logger.error(f"Error handling interruption: {e}")
+    
+    async def close_live_session(self, session: ADKVoiceSession):
+        """Close ADK live session and cleanup."""
+        if session.live_session:
+            try:
+                await session.live_session.close()
+                session.live_session = None
+                
+                await session.log_event("live_session_closed", {
+                    "session_id": session.session_id
+                })
+                
+                self.logger.info(f"Closed ADK live session: {session.session_id}")
+                
+            except Exception as e:
+                self.logger.error(f"Error closing live session: {e}")
+    
+    def _generate_mock_audio(self, text: str) -> bytes:
+        """Generate mock audio for fallback."""
+        # Generate 1 second of silence at 16kHz, 16-bit, mono
+        duration_seconds = min(len(text) * 0.1, 3.0)  # Max 3 seconds
+        sample_rate = 16000
+        samples = int(duration_seconds * sample_rate)
+        return b'\x00\x00' * samples
 
 
 class GoogleADKVoiceAgent:
-    """Enhanced Google ADK agent with voice capabilities and multi-agent system."""
+    """Google ADK Voice Agent with Runner.run_live() integration."""
     
-    def __init__(self, config: ADKWebConfig, code_executor):
+    def __init__(self, config: ADKWebConfig):
         self.config = config
         self.logger = logging.getLogger(__name__)
-        self.active_sessions: Dict[str, EnhancedVoiceSession] = {}
+        self.active_sessions: Dict[str, ADKVoiceSession] = {}
         
-        # Initialize multi-agent system
-        self.multi_agent_system = MultiAgentVoiceSystem(config, code_executor)
+        # Initialize ADK Live Runner
+        self.live_runner = ADKLiveRunner(config)
         
-        # Speech processing
-        self.speech_processor = SpeechProcessor(config)
-        
-        # Conversation context management
-        self.context_manager = PersistentConversationContext()
-        self.response_generator = ContextualResponseGenerator()
-        
-        # Live API session management
-        self.live_sessions: Dict[str, Any] = {}
+        # Voice code executor for fallback
+        self.voice_code_executor = VoiceCodeExecutor() if hasattr(self, 'VoiceCodeExecutor') else None
     
     async def initialize(self):
-        """Initialize the voice agent and multi-agent system."""
+        """Initialize the voice agent."""
         try:
             if ADK_AVAILABLE:
-                self.logger.info("Initializing Google ADK Voice Agent with multi-agent system")
-                # Initialize workflow agents
-                self.workflow_agents = await self.multi_agent_system.create_workflow_agents()
+                self.logger.info("Initializing Google ADK Voice Agent with Runner.run_live()")
             else:
-                self.logger.info("Initializing fallback voice agent")
-                await self.multi_agent_system.fallback_agent.initialize()
+                self.logger.warning("ADK not available, using fallback implementation")
                 
         except Exception as e:
             self.logger.error(f"Failed to initialize voice agent: {e}")
@@ -454,106 +394,190 @@ class GoogleADKVoiceAgent:
         self, 
         websocket, 
         user_id: Optional[str] = None
-    ) -> EnhancedVoiceSession:
-        """Create new enhanced voice session."""
+    ) -> ADKVoiceSession:
+        """Create new ADK voice session."""
         session_id = str(uuid.uuid4())
-        session = EnhancedVoiceSession(session_id, websocket, user_id)
+        session = ADKVoiceSession(session_id, websocket, user_id)
         
-        await session.initialize_adk_session()
-        
-        # Initialize conversation context
-        session.conversation_memory = await self.context_manager.get_or_create_context(session_id, user_id)
+        # Start ADK live session
+        success = await self.live_runner.start_live_session(session)
+        if not success:
+            self.logger.warning(f"Failed to start live session for {session_id}, using fallback")
         
         self.active_sessions[session_id] = session
         
-        # Start speech processing
-        await self.speech_processor.start_speech_processing(session)
-        
-        self.logger.info(f"Created enhanced voice session: {session_id}")
+        self.logger.info(f"Created ADK voice session: {session_id}")
         return session
     
-    async def process_voice_input(
-        self, 
-        audio_chunk: AudioChunk, 
-        session: EnhancedVoiceSession
-    ) -> Optional[str]:
-        """Process voice input and return transcription."""
+    async def handle_voice_websocket(self, websocket, session: ADKVoiceSession):
+        """Handle WebSocket messages for voice streaming."""
         try:
-            await session.log_event("voice_input_received", {
-                "chunk_size": len(audio_chunk.data),
-                "sequence": audio_chunk.sequence_number
-            })
+            # Send session started message
+            start_message = {
+                "type": "session_started",
+                "session_id": session.session_id,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            await websocket.send(json.dumps(start_message))
             
-            # Process through speech processor
-            transcription = await self.speech_processor.process_audio_chunk(audio_chunk, session)
+            # Handle incoming messages
+            async for message in websocket:
+                if message.type == 'text':
+                    await self._handle_websocket_message(message.data, session, websocket)
+                elif message.type == 'error':
+                    self.logger.error(f"WebSocket error: {message.data}")
+                    break
+                    
+        except Exception as e:
+            self.logger.error(f"Error in voice WebSocket handler: {e}")
+        finally:
+            await self.close_voice_session(session)
+    
+    async def _handle_websocket_message(self, message_data: str, session: ADKVoiceSession, websocket):
+        """Handle individual WebSocket message."""
+        try:
+            data = json.loads(message_data)
+            message_type = data.get("type")
             
+            if message_type == "audio_chunk":
+                await self._handle_audio_chunk(data, session, websocket)
+            elif message_type == "start_listening":
+                await self._handle_start_listening(session, websocket)
+            elif message_type == "stop_listening":
+                await self._handle_stop_listening(session, websocket)
+            elif message_type == "interruption":
+                await self._handle_interruption(session, websocket)
+            else:
+                self.logger.warning(f"Unknown message type: {message_type}")
+                
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Invalid JSON in WebSocket message: {e}")
+        except Exception as e:
+            self.logger.error(f"Error handling WebSocket message: {e}")
+    
+    async def _handle_audio_chunk(self, data: Dict[str, Any], session: ADKVoiceSession, websocket):
+        """Handle incoming audio chunk."""
+        try:
+            # Extract audio data
+            audio_hex = data.get("audio_data", "")
+            audio_bytes = bytes.fromhex(audio_hex)
+            sequence_number = data.get("sequence_number", 0)
+            
+            # Create audio chunk
+            audio_chunk = AudioChunk(
+                data=audio_bytes,
+                timestamp=datetime.now(timezone.utc),
+                sequence_number=sequence_number
+            )
+            
+            # Process through ADK LiveRequestQueue
+            transcription = await self.live_runner.process_audio_chunk(session, audio_chunk)
+            
+            # Send acknowledgment
+            ack_message = {
+                "type": "audio_chunk_ack",
+                "session_id": session.session_id,
+                "sequence_number": sequence_number,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            await websocket.send(json.dumps(ack_message))
+            
+            # If we got a transcription, generate response
             if transcription:
-                await session.log_event("transcription_generated", {
-                    "transcription": transcription,
-                    "chunk_sequence": audio_chunk.sequence_number
-                })
-            
-            return transcription
+                await self._send_transcription(transcription, session, websocket)
+                await self._generate_and_send_response(transcription, session, websocket)
             
         except Exception as e:
-            self.logger.error(f"Error processing voice input: {e}")
-            return None
+            self.logger.error(f"Error handling audio chunk: {e}")
     
-    async def generate_voice_response(
-        self, 
-        text: str, 
-        session: EnhancedVoiceSession
-    ) -> AsyncIterator[bytes]:
-        """Generate voice response from text."""
+    async def _send_transcription(self, transcription: str, session: ADKVoiceSession, websocket):
+        """Send transcription to client."""
+        transcription_message = {
+            "type": "transcription",
+            "text": transcription,
+            "session_id": session.session_id,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        await websocket.send(json.dumps(transcription_message))
+    
+    async def _generate_and_send_response(self, text: str, session: ADKVoiceSession, websocket):
+        """Generate and send voice response."""
         try:
-            # Process text through multi-agent system
-            response_text = await self.multi_agent_system.process_voice_message(text, session)
+            session.is_speaking = True
             
-            await session.log_event("response_generated", {
-                "input_text": text,
-                "response_text": response_text
-            })
+            # Generate response using ADK
+            response_text = ""
+            audio_chunks = []
             
-            # Generate speech from response text
-            async for audio_chunk in self.speech_processor.generate_speech_response(response_text, session):
+            async for audio_chunk in self.live_runner.generate_response(session, text):
                 if audio_chunk:
-                    yield audio_chunk
+                    audio_chunks.append(audio_chunk)
+            
+            # Get the text response from session history
+            if session.conversation_history:
+                last_message = session.conversation_history[-1]
+                if last_message.role == "assistant":
+                    response_text = last_message.content
+            
+            # Send response with audio
+            response_message = {
+                "type": "response",
+                "text": response_text,
+                "audio_data": b''.join(audio_chunks).hex() if audio_chunks else None,
+                "session_id": session.session_id,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            await websocket.send(json.dumps(response_message))
+            
+            session.is_speaking = False
             
         except Exception as e:
-            self.logger.error(f"Error generating voice response: {e}")
-            yield b""
+            self.logger.error(f"Error generating response: {e}")
+            session.is_speaking = False
     
-    async def handle_interruption(self, session: EnhancedVoiceSession):
-        """Handle voice interruption."""
-        await session.log_event("interruption", {"timestamp": datetime.now(timezone.utc).isoformat()})
-        session.is_speaking = False
+    async def _handle_start_listening(self, session: ADKVoiceSession, websocket):
+        """Handle start listening request."""
+        session.is_listening = True
         
-        # Stop any ongoing Live API operations
-        if session.session_id in self.live_sessions:
-            # Implementation will be added with Live API integration
-            pass
+        response = {
+            "type": "listening_started",
+            "session_id": session.session_id,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        await websocket.send(json.dumps(response))
     
-    async def close_voice_session(self, session: EnhancedVoiceSession):
+    async def _handle_stop_listening(self, session: ADKVoiceSession, websocket):
+        """Handle stop listening request."""
+        session.is_listening = False
+        
+        response = {
+            "type": "listening_stopped",
+            "session_id": session.session_id,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        await websocket.send(json.dumps(response))
+    
+    async def _handle_interruption(self, session: ADKVoiceSession, websocket):
+        """Handle voice interruption."""
+        await self.live_runner.handle_interruption(session)
+        
+        response = {
+            "type": "interruption_handled",
+            "session_id": session.session_id,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        await websocket.send(json.dumps(response))
+    
+    async def close_voice_session(self, session: ADKVoiceSession):
         """Close voice session and cleanup resources."""
         session_id = session.session_id
         
-        # Stop speech processing
-        await self.speech_processor.stop_speech_processing(session)
-        
-        # Save conversation context
-        if session.conversation_memory:
-            await self.context_manager.close_context(session_id)
-        
-        # Log session summary
-        context = await self.multi_agent_system.get_session_context(session)
-        await session.log_event("session_closed", context)
+        # Close ADK live session
+        await self.live_runner.close_live_session(session)
         
         # Cleanup resources
         if session_id in self.active_sessions:
             del self.active_sessions[session_id]
-        
-        if session_id in self.live_sessions:
-            del self.live_sessions[session_id]
         
         self.logger.info(f"Closed voice session: {session_id}")
     
@@ -561,8 +585,16 @@ class GoogleADKVoiceAgent:
         """Get statistics about active voice sessions."""
         return {
             "active_sessions": len(self.active_sessions),
-            "live_sessions": len(self.live_sessions),
             "adk_available": ADK_AVAILABLE,
-            "speech_processing": self.speech_processor.get_processing_stats(),
-            "context_management": self.context_manager.get_context_stats()
+            "sessions": [
+                {
+                    "session_id": session.session_id,
+                    "user_id": session.user_id,
+                    "is_speaking": session.is_speaking,
+                    "is_listening": session.is_listening,
+                    "conversation_length": len(session.conversation_history),
+                    "last_activity": session.last_activity.isoformat()
+                }
+                for session in self.active_sessions.values()
+            ]
         }

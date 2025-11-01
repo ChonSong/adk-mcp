@@ -7,13 +7,14 @@ from aiohttp import web
 import websockets
 from websockets.server import WebSocketServerProtocol
 
-from .streaming import BiDirectionalStream, StreamMessage, WebSocketStream
-from .executor import PythonExecutor, SafePythonExecutor
-from .mock_services import MockGoogleCloudServices
-from .mobile.android_webview import AndroidWebViewBridge
-from .google_adk import GoogleADKWebAgent, ADKWebConfig, ADKWebStreamHandler, create_adk_config_from_env
-from .voice_streaming import VoiceStreamManager, VoiceWebSocketHandler
+from .google_adk import GoogleADKWebAgent, ADKWebConfig, create_adk_config_from_env
 from .adk_voice_agent import GoogleADKVoiceAgent
+
+try:
+    from .mobile.android_webview import AndroidWebViewBridge
+    ANDROID_WEBVIEW_AVAILABLE = True
+except ImportError:
+    ANDROID_WEBVIEW_AVAILABLE = False
 
 
 class ADKServer:
@@ -24,8 +25,6 @@ class ADKServer:
         host: str = "0.0.0.0",
         port: int = 8080,
         websocket_port: int = 8081,
-        enable_executor: bool = True,
-        enable_mock_services: bool = True,
         enable_google_adk: bool = True,
         adk_config: Optional[ADKWebConfig] = None,
     ):
@@ -36,10 +35,8 @@ class ADKServer:
             host: Host to bind to
             port: HTTP server port
             websocket_port: WebSocket server port
-            enable_executor: Enable Python code execution
-            enable_mock_services: Enable mock Google Cloud services
-            enable_google_adk: Enable Google ADK-Web integration
-            adk_config: Google ADK-Web configuration (uses env vars if None)
+            enable_google_adk: Enable Google ADK integration
+            adk_config: Google ADK configuration (uses env vars if None)
         """
         self.host = host
         self.port = port
@@ -48,24 +45,18 @@ class ADKServer:
         self.setup_routes()
         
         # Components
-        self.executor = SafePythonExecutor() if enable_executor else None
-        self.mock_services = MockGoogleCloudServices() if enable_mock_services else None
-        self.webview_bridge = AndroidWebViewBridge()
+        self.webview_bridge = AndroidWebViewBridge() if ANDROID_WEBVIEW_AVAILABLE else None
         
-        # Google ADK-Web integration
+        # Google ADK integration
         self.google_adk_agent = None
         self.google_adk_voice_agent = None
         if enable_google_adk:
             config = adk_config or create_adk_config_from_env()
             self.google_adk_agent = GoogleADKWebAgent(config)
-            self.google_adk_voice_agent = GoogleADKVoiceAgent(config, self.executor)
+            self.google_adk_voice_agent = GoogleADKVoiceAgent(config)
         
-        # Voice streaming
-        self.voice_manager = VoiceStreamManager()
-        self.voice_handler = VoiceWebSocketHandler(self.voice_manager)
-        
-        # Active streams
-        self.active_streams: Dict[str, WebSocketStream] = {}
+        # Active voice sessions (managed by ADK)
+        self.active_voice_sessions = {}
         
     def setup_routes(self):
         """Setup HTTP routes."""
@@ -76,10 +67,6 @@ class ADKServer:
         
         # Static file serving
         self.app.router.add_static("/static/", "static/")
-        self.app.router.add_post("/execute", self.handle_execute)
-        self.app.router.add_post("/api/sentiment", self.handle_sentiment)
-        self.app.router.add_post("/api/translate", self.handle_translate)
-        self.app.router.add_post("/api/generate", self.handle_generate)
         
         # Google ADK-Web endpoints
         self.app.router.add_post("/adk/chat", self.handle_adk_chat)
@@ -171,112 +158,26 @@ class ADKServer:
     
     async def handle_health(self, request: web.Request) -> web.Response:
         """Health check endpoint."""
-        voice_stats = self.voice_manager.get_session_stats() if self.voice_manager else {}
+        voice_stats = self.google_adk_voice_agent.get_session_stats() if self.google_adk_voice_agent else {}
         
         return web.json_response({
             "status": "healthy",
-            "active_streams": len(self.active_streams),
-            "executor_enabled": self.executor is not None,
-            "mock_services_enabled": self.mock_services is not None,
             "google_adk_enabled": self.google_adk_agent is not None,
             "voice_streaming_enabled": self.google_adk_voice_agent is not None,
             "active_sessions": len(self.google_adk_agent.active_sessions) if self.google_adk_agent else 0,
             "active_voice_sessions": voice_stats.get("active_sessions", 0),
+            "android_webview_available": ANDROID_WEBVIEW_AVAILABLE,
         })
     
     async def handle_webview(self, request: web.Request) -> web.Response:
         """Serve Android WebView interface."""
+        if not ANDROID_WEBVIEW_AVAILABLE:
+            return web.Response(text="Android WebView not available", status=404)
+        
         html = self.webview_bridge.get_html_template()
         return web.Response(text=html, content_type="text/html")
     
-    async def handle_execute(self, request: web.Request) -> web.Response:
-        """Execute Python code."""
-        if not self.executor:
-            return web.json_response(
-                {"error": "Python execution is not enabled"},
-                status=400
-            )
-        
-        try:
-            data = await request.json()
-            code = data.get("code", "")
-            timeout = data.get("timeout")
-            
-            result = await self.executor.execute(code, timeout)
-            return web.json_response(result.to_dict())
-        except Exception as e:
-            return web.json_response(
-                {"error": str(e)},
-                status=500
-            )
-    
-    async def handle_sentiment(self, request: web.Request) -> web.Response:
-        """Mock sentiment analysis."""
-        if not self.mock_services:
-            return web.json_response(
-                {"error": "Mock services not enabled"},
-                status=400
-            )
-        
-        try:
-            data = await request.json()
-            text = data.get("text", "")
-            
-            result = await self.mock_services.analyze_sentiment(text)
-            return web.json_response(result.to_dict())
-        except Exception as e:
-            return web.json_response(
-                {"error": str(e)},
-                status=500
-            )
-    
-    async def handle_translate(self, request: web.Request) -> web.Response:
-        """Mock text translation."""
-        if not self.mock_services:
-            return web.json_response(
-                {"error": "Mock services not enabled"},
-                status=400
-            )
-        
-        try:
-            data = await request.json()
-            text = data.get("text", "")
-            target_language = data.get("target_language", "en")
-            source_language = data.get("source_language")
-            
-            result = await self.mock_services.translate_text(
-                text, target_language, source_language
-            )
-            return web.json_response(result.to_dict())
-        except Exception as e:
-            return web.json_response(
-                {"error": str(e)},
-                status=500
-            )
-    
-    async def handle_generate(self, request: web.Request) -> web.Response:
-        """Mock text generation."""
-        if not self.mock_services:
-            return web.json_response(
-                {"error": "Mock services not enabled"},
-                status=400
-            )
-        
-        try:
-            data = await request.json()
-            prompt = data.get("prompt", "")
-            max_tokens = data.get("max_tokens", 100)
-            temperature = data.get("temperature", 0.7)
-            
-            result = await self.mock_services.generate_text(
-                prompt, max_tokens, temperature
-            )
-            return web.json_response(result)
-        except Exception as e:
-            return web.json_response(
-                {"error": str(e)},
-                status=500
-            )
+
     
     async def handle_adk_chat(self, request: web.Request) -> web.Response:
         """Handle chat with Google ADK-Web agent."""
@@ -363,15 +264,18 @@ class ADKServer:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         
-        # Create voice session
+        # Create voice session using ADK
         if self.google_adk_voice_agent:
             session = await self.google_adk_voice_agent.create_voice_session(ws)
+            self.active_voice_sessions[session.session_id] = session
             
             try:
-                # Handle voice streaming
-                await self.voice_handler.handle_connection(ws, "/voice/stream")
+                # Handle voice streaming with ADK
+                await self.google_adk_voice_agent.handle_voice_websocket(ws, session)
             finally:
                 await self.google_adk_voice_agent.close_voice_session(session)
+                if session.session_id in self.active_voice_sessions:
+                    del self.active_voice_sessions[session.session_id]
         else:
             await ws.close(code=1011, message=b"Voice streaming not available")
         
@@ -380,61 +284,23 @@ class ADKServer:
     async def handle_voice_stats(self, request: web.Request) -> web.Response:
         """Get voice streaming statistics."""
         stats = {
-            "voice_manager": self.voice_manager.get_session_stats(),
-            "voice_agent": self.google_adk_voice_agent.get_session_stats() if self.google_adk_voice_agent else None
+            "voice_agent": self.google_adk_voice_agent.get_session_stats() if self.google_adk_voice_agent else None,
+            "active_voice_sessions": len(self.active_voice_sessions)
         }
         return web.json_response(stats)
     
     async def handle_voice_client(self, request: web.Request) -> web.Response:
         """Serve voice-enabled web client."""
         try:
-            with open("static/voice_client.html", "r") as f:
+            with open("static/voice_client.html", "r", encoding="utf-8") as f:
                 html_content = f.read()
             return web.Response(text=html_content, content_type="text/html")
         except FileNotFoundError:
             return web.Response(text="Voice client not found", status=404)
+        except UnicodeDecodeError:
+            return web.Response(text="Error reading voice client file", status=500)
     
-    async def handle_websocket(self, websocket: WebSocketServerProtocol):
-        """Handle WebSocket connection for bidirectional streaming."""
-        stream = WebSocketStream(websocket)
-        self.active_streams[stream.stream_id] = stream
-        
-        try:
-            await stream.start()
-            
-            # Set up message handler
-            if self.google_adk_agent:
-                # Use Google ADK-Web handler
-                adk_handler = ADKWebStreamHandler(self.google_adk_agent)
-                stream.handler = adk_handler
-            else:
-                # Fallback to echo handler
-                async def handle_message(message: StreamMessage):
-                    response = StreamMessage(
-                        id=message.id + "_response",
-                        content=f"Received: {message.content}",
-                        timestamp=message.timestamp,
-                        message_type="text"
-                    )
-                    await stream.send_queue.put(response)
-                
-                stream.handler.register_handler("text", handle_message)
-            
-            # Start listening
-            await stream.start_websocket_listener()
-            
-        finally:
-            await stream.stop()
-            del self.active_streams[stream.stream_id]
-    
-    async def start_websocket_server(self):
-        """Start WebSocket server."""
-        async with websockets.serve(
-            self.handle_websocket,
-            self.host,
-            self.websocket_port
-        ):
-            await asyncio.Future()  # Run forever
+
     
     async def start(self):
         """Start the server."""
@@ -454,14 +320,17 @@ class ADKServer:
         
         print(f"ADK-MCP Server started")
         print(f"HTTP server: http://{self.host}:{self.port}")
-        print(f"WebSocket server: ws://{self.host}:{self.websocket_port}")
         if self.google_adk_agent:
-            print(f"Google ADK-Web: Enabled")
+            print(f"Google ADK: Enabled")
         else:
-            print(f"Google ADK-Web: Disabled")
+            print(f"Google ADK: Disabled")
+        if self.google_adk_voice_agent:
+            print(f"Voice streaming: Enabled")
+        else:
+            print(f"Voice streaming: Disabled")
         
-        # Start WebSocket server
-        await self.start_websocket_server()
+        # Keep server running
+        await asyncio.Future()  # Run forever
     
     def run(self):
         """Run the server (blocking)."""
@@ -470,7 +339,11 @@ class ADKServer:
 
 def main():
     """Main entry point."""
-    server = ADKServer()
+    server = ADKServer(
+        host="0.0.0.0",
+        port=8080,
+        enable_google_adk=True
+    )
     server.run()
 
 

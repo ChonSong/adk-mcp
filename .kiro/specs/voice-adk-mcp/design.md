@@ -84,47 +84,66 @@ class VoiceSession:
 - Audio format: 16kHz, 16-bit, mono PCM
 - Chunk size: 1024 bytes (64ms at 16kHz)
 
-### 2. Google ADK-Web Integration
+### 2. Google ADK Integration (Prebuilt Components)
 
-**Purpose**: Interfaces with Google's Live API for real-time voice processing
+**Purpose**: Leverages Google ADK's built-in Live API and streaming capabilities
 
-**Key Classes**:
+**Key ADK Components Used**:
 ```python
-class GoogleADKVoiceAgent:
-    """Enhanced Google ADK agent with voice capabilities"""
-    
-    async def initialize_live_session(self) -> LiveSession
-    async def process_voice_input(self, audio_chunk: bytes) -> Optional[str]
-    async def generate_voice_response(self, text: str) -> AsyncIterator[bytes]
-    async def handle_interruption(self, session: LiveSession)
+from google.adk.agents import LlmAgent
+from google.adk.runtime import Runner, RunConfig
+from google.adk.sessions import SessionService, InMemorySessionService
+from google.adk.tools import BuiltInCodeExecutor
 
-class LiveRequestQueue:
-    """Manages real-time requests to Google Live API"""
+class VoiceEnabledAgent(LlmAgent):
+    """Extends ADK's LlmAgent with voice-specific tools"""
     
-    async def send_audio_chunk(self, audio: bytes)
-    async def receive_transcription(self) -> Optional[str]
-    async def send_text_response(self, text: str)
-    async def receive_audio_response(self) -> AsyncIterator[bytes]
+    def __init__(self):
+        super().__init__(
+            name="voice_assistant",
+            model="gemini-2.5-pro",
+            tools=[BuiltInCodeExecutor(), custom_voice_tools],
+            instruction="Voice-enabled AI assistant with code execution"
+        )
+
+# Use ADK's prebuilt streaming infrastructure
+runner = Runner(agent=voice_agent)
+run_config = RunConfig(
+    streaming_mode="BIDI",
+    response_modalities=["TEXT", "AUDIO"],
+    speech_config={"voice": "en-US-Standard-A"}
+)
 ```
 
-### 3. Enhanced Code Execution Tool
+### 3. Code Execution Integration (ADK Built-in Tools)
 
-**Purpose**: Executes Python code safely with voice integration
+**Purpose**: Leverages ADK's prebuilt code execution capabilities
 
-**Key Classes**:
+**Key ADK Tools Used**:
 ```python
-class VoiceCodeExecutor:
-    """Code execution with voice response capabilities"""
+from google.adk.tools import BuiltInCodeExecutor, FunctionTool
+
+# Use ADK's prebuilt code executor
+code_executor = BuiltInCodeExecutor()
+
+# Custom voice-aware wrapper as FunctionTool
+@FunctionTool
+def execute_code_with_voice_response(code: str, session_id: str) -> dict:
+    """Execute Python code and format results for voice response.
     
-    async def execute_code_from_voice(self, code: str, session: VoiceSession) -> ExecutionResult
-    async def speak_execution_result(self, result: ExecutionResult, session: VoiceSession)
-    
-class SafeExecutionEnvironment:
-    """Sandboxed environment for code execution"""
-    
-    def execute_with_timeout(self, code: str, timeout: int = 30) -> ExecutionResult
-    def sanitize_output(self, output: str) -> str
-    def check_security_constraints(self, code: str) -> bool
+    Args:
+        code: Python code to execute
+        session_id: Current voice session identifier
+        
+    Returns:
+        dict: Execution result with voice-friendly formatting
+    """
+    result = code_executor.execute(code)
+    return {
+        "status": "success" if result.success else "error",
+        "output": result.output,
+        "voice_summary": format_for_speech(result.output)
+    }
 ```
 
 ### 4. Web Audio Client
@@ -365,11 +384,16 @@ class CodeExecutionRequest:
 ## Technology Stack
 
 ### Backend
-- **Framework**: FastAPI (existing)
-- **WebSocket**: FastAPI WebSocket support
-- **Google Integration**: google-adk Python package
-- **Audio Processing**: PyAudio, wave libraries
-- **Code Execution**: subprocess (MVP), Docker (future)
+- **Framework**: FastAPI (existing) + Google ADK integration
+- **Agent System**: google-adk LlmAgent, Runner, RunConfig with max_llm_calls
+- **Session Management**: VertexAiSessionService (production), InMemorySessionService (dev)
+- **Code Execution**: ADK BuiltInCodeExecutor, FunctionTool wrappers
+- **Streaming**: ADK Runner.run_live(), LiveRequestQueue
+- **Memory**: VertexAiRagMemoryService, load_memory tool
+- **Artifacts**: GcsArtifactService for binary data persistence
+- **Observability**: OpenInference instrumentation, Arize AX/Phoenix
+- **Safety**: Callback system with Gemini Flash Lite guardrails
+- **Enterprise**: OpenAPIToolset, ApplicationIntegrationToolset
 
 ### Frontend
 - **Web**: Vanilla JavaScript with Web Audio API
@@ -378,7 +402,10 @@ class CodeExecutionRequest:
 - **Communication**: WebSocket API
 
 ### Infrastructure
-- **Cloud**: Google Cloud Platform
-- **APIs**: Vertex AI, Live API, Speech APIs
-- **Authentication**: Service Account credentials
-- **Model**: gemini-2.5-pro
+- **Cloud**: Google Cloud Platform with Vertex AI Agent Engine
+- **APIs**: Vertex AI, Live API, Speech APIs, Application Integration
+- **Authentication**: Service Account credentials with ADK's built-in auth
+- **Models**: gemini-2.5-pro (main), gemini-2.5-flash (guardrails)
+- **Observability**: OpenInference with Arize AX/Phoenix integration
+- **Storage**: GcsArtifactService, VertexAiSessionService
+- **Knowledge**: VertexAiRagMemoryService, VertexAiSearchTool
