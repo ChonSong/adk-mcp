@@ -48,8 +48,8 @@ class VoiceMessage:
             self.timestamp = datetime.now(timezone.utc)
 
 
-class ADKVoiceSession:
-    """Voice session integrated with ADK SessionService."""
+class ConversationContext:
+    """Enhanced conversation contexh ADK SessionService."""
     
     def __init__(self, session_id: str, websocket, user_id: Optional[str] = None):
         self.session_id = session_id

@@ -28,7 +28,8 @@
     - Add speech_config for voice synthesis settings
     - _Requirements: 1.3, 1.4, 1.5, 9.1_
 
-  - [ ] 2.3 Implement ADK SessionService for conversation context
+  - [-] 2.3 Implement ADK SessionService for conversation context
+
     - Use InMemorySessionService for session management
     - Leverage session.state for conversation history
     - Integrate ADK's automatic context management
